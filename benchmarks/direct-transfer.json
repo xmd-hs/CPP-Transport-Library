@@ -1,0 +1,420 @@
+{
+    "samples":  {
+                    "before":  [
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.4024,
+                                       "mib_per_second":  1272.52,
+                                       "cpu_seconds":  0.5495,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.4211,
+                                       "mib_per_second":  1215.86,
+                                       "cpu_seconds":  0.4396,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1684,
+                                       "mib_per_second":  3041.13,
+                                       "cpu_seconds":  0.618,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1028,
+                                       "mib_per_second":  4978.13,
+                                       "cpu_seconds":  0.3703,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.2509,
+                                       "mib_per_second":  2040.9,
+                                       "cpu_seconds":  0.4224,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.4659,
+                                       "mib_per_second":  1099.04,
+                                       "cpu_seconds":  0.4846,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1993,
+                                       "mib_per_second":  2569.2,
+                                       "cpu_seconds":  0.7722,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1795,
+                                       "mib_per_second":  2852.94,
+                                       "cpu_seconds":  0.4756,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.2599,
+                                       "mib_per_second":  1970.12,
+                                       "cpu_seconds":  0.4296,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.4415,
+                                       "mib_per_second":  1159.73,
+                                       "cpu_seconds":  0.4605,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.3003,
+                                       "mib_per_second":  1704.96,
+                                       "cpu_seconds":  0.9839,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1173,
+                                       "mib_per_second":  4365.18,
+                                       "cpu_seconds":  0.4513,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.3207,
+                                       "mib_per_second":  1596.62,
+                                       "cpu_seconds":  0.4632,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.3829,
+                                       "mib_per_second":  1337.16,
+                                       "cpu_seconds":  0.402,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.2049,
+                                       "mib_per_second":  2498.59,
+                                       "cpu_seconds":  0.8596,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.0906,
+                                       "mib_per_second":  5650.24,
+                                       "cpu_seconds":  0.3102,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.1877,
+                                       "mib_per_second":  2728.15,
+                                       "cpu_seconds":  0.3302,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  1,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  512,
+                                       "seconds":  0.614,
+                                       "mib_per_second":  833.88,
+                                       "cpu_seconds":  0.6231,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "upload",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1761,
+                                       "mib_per_second":  2907.8,
+                                       "cpu_seconds":  0.6398,
+                                       "sha256":  "PASS"
+                                   },
+                                   {
+                                       "mode":  "download",
+                                       "clients":  4,
+                                       "host":  "192.168.80.211",
+                                       "size_mib":  128,
+                                       "seconds":  0.1011,
+                                       "mib_per_second":  5065.8,
+                                       "cpu_seconds":  0.3678,
+                                       "sha256":  "PASS"
+                                   }
+                               ],
+                    "after":  [
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.2061,
+                                      "mib_per_second":  2483.87,
+                                      "cpu_seconds":  0.215,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.3504,
+                                      "mib_per_second":  1461.03,
+                                      "cpu_seconds":  0.3592,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.1275,
+                                      "mib_per_second":  4014.55,
+                                      "cpu_seconds":  0.2508,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.0892,
+                                      "mib_per_second":  5737.53,
+                                      "cpu_seconds":  0.3325,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.224,
+                                      "mib_per_second":  2285.95,
+                                      "cpu_seconds":  0.2271,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.2577,
+                                      "mib_per_second":  1987.03,
+                                      "cpu_seconds":  0.2664,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.122,
+                                      "mib_per_second":  4195.16,
+                                      "cpu_seconds":  0.2373,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.0865,
+                                      "mib_per_second":  5915.74,
+                                      "cpu_seconds":  0.3281,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.4446,
+                                      "mib_per_second":  1151.6,
+                                      "cpu_seconds":  0.4206,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.6703,
+                                      "mib_per_second":  763.84,
+                                      "cpu_seconds":  0.6894,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.5709,
+                                      "mib_per_second":  896.91,
+                                      "cpu_seconds":  1.2015,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.1763,
+                                      "mib_per_second":  2903.9,
+                                      "cpu_seconds":  0.691,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.2283,
+                                      "mib_per_second":  2243.06,
+                                      "cpu_seconds":  0.2265,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.4786,
+                                      "mib_per_second":  1069.88,
+                                      "cpu_seconds":  0.4977,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.1201,
+                                      "mib_per_second":  4263.06,
+                                      "cpu_seconds":  0.2351,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.0814,
+                                      "mib_per_second":  6292.01,
+                                      "cpu_seconds":  0.3014,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.2093,
+                                      "mib_per_second":  2445.9,
+                                      "cpu_seconds":  0.2154,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  1,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  512,
+                                      "seconds":  0.3598,
+                                      "mib_per_second":  1423.02,
+                                      "cpu_seconds":  0.4345,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "upload",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.2298,
+                                      "mib_per_second":  2228.29,
+                                      "cpu_seconds":  0.4916,
+                                      "sha256":  "PASS"
+                                  },
+                                  {
+                                      "mode":  "download",
+                                      "clients":  4,
+                                      "host":  "192.168.80.211",
+                                      "size_mib":  128,
+                                      "seconds":  0.1139,
+                                      "mib_per_second":  4496.54,
+                                      "cpu_seconds":  0.42,
+                                      "sha256":  "PASS"
+                                  }
+                              ]
+                },
+    "methodology":  {
+                        "pool":  "ON in both builds",
+                        "four_clients_mib_each":  128,
+                        "rounds":  5,
+                        "single_mib":  512,
+                        "order":  "alternating before/after",
+                        "storage":  "/dev/shm",
+                        "timing":  "startup, connect, transfer, fsync; excludes generation and SHA256",
+                        "host":  "192.168.80.211",
+                        "outliers":  "retained",
+                        "cpu":  "server and clients user+system seconds"
+                    }
+}

@@ -1,0 +1,249 @@
+{
+  "environment": "WSL Ubuntu, GCC 15.2, Release, Kama enabled in both versions; /dev/shm; 32MiB per client",
+  "before": [
+    {
+      "mode": "upload",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 5.0636,
+      "mib_per_second": 6.32,
+      "cpu_seconds": 0.0374,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 1.8051,
+      "mib_per_second": 17.73,
+      "cpu_seconds": 0.0234,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.2607,
+      "mib_per_second": 24.33,
+      "cpu_seconds": 0.1845,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.9093,
+      "mib_per_second": 21.66,
+      "cpu_seconds": 0.1909,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 4.549,
+      "mib_per_second": 7.03,
+      "cpu_seconds": 0.0483,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 1.96,
+      "mib_per_second": 16.33,
+      "cpu_seconds": 0.0352,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.6681,
+      "mib_per_second": 22.58,
+      "cpu_seconds": 0.2736,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.9795,
+      "mib_per_second": 21.41,
+      "cpu_seconds": 0.2247,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 4.7915,
+      "mib_per_second": 6.68,
+      "cpu_seconds": 0.0447,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 1.485,
+      "mib_per_second": 21.55,
+      "cpu_seconds": 0.0283,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.3249,
+      "mib_per_second": 24.04,
+      "cpu_seconds": 0.199,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 6.0709,
+      "mib_per_second": 21.08,
+      "cpu_seconds": 0.1752,
+      "sha256": "PASS"
+    }
+  ],
+  "after": [
+    {
+      "mode": "upload",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 4.8769,
+      "mib_per_second": 6.56,
+      "cpu_seconds": 0.0513,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 1.6579,
+      "mib_per_second": 19.3,
+      "cpu_seconds": 0.048,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 4.9705,
+      "mib_per_second": 25.75,
+      "cpu_seconds": 0.1695,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.7597,
+      "mib_per_second": 22.22,
+      "cpu_seconds": 0.1996,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 5.0255,
+      "mib_per_second": 6.37,
+      "cpu_seconds": 0.0439,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 1.5015,
+      "mib_per_second": 21.31,
+      "cpu_seconds": 0.026,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 4.8511,
+      "mib_per_second": 26.39,
+      "cpu_seconds": 0.185,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.7787,
+      "mib_per_second": 22.15,
+      "cpu_seconds": 0.2346,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 5.2568,
+      "mib_per_second": 6.09,
+      "cpu_seconds": 0.0353,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 1,
+      "size_mib": 32,
+      "seconds": 1.5004,
+      "mib_per_second": 21.33,
+      "cpu_seconds": 0.0252,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "upload",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.22,
+      "mib_per_second": 24.52,
+      "cpu_seconds": 0.2348,
+      "sha256": "PASS"
+    },
+    {
+      "mode": "download",
+      "clients": 4,
+      "size_mib": 32,
+      "seconds": 5.9712,
+      "mib_per_second": 21.44,
+      "cpu_seconds": 0.1952,
+      "sha256": "PASS"
+    }
+  ],
+  "eventloop_seconds": {
+    "before": [
+      0.035994,
+      0.040278,
+      0.040459,
+      0.036789,
+      0.031355
+    ],
+    "after": [
+      0.021223,
+      0.02162,
+      0.021967,
+      0.021812,
+      0.021707
+    ]
+  },
+  "buffer_GiB_s": {
+    "before": {
+      "threads1": 19.217,
+      "threads4": 60.192
+    },
+    "after": {
+      "threads1": 18.114,
+      "threads4": 59.602
+    }
+  }
+}
