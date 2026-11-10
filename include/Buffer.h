@@ -7,7 +7,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include "KamaMemory.h"
+#include "XmdMemory.h"
 
 // 网络库底层的缓冲区类型定义
 class Buffer

@@ -6,7 +6,7 @@
 #include <memory>
 
 #include "noncopyable.h"
-#include "KamaMemory.h"
+#include "XmdMemory.h"
 class EventLoop;
 class EventLoopThread;
 

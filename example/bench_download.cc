@@ -19,7 +19,7 @@
 #include "EventLoop.h"
 #include "InetAddress.h"
 #include "TcpServer.h"
-#include <kama/MemoryPool.h>
+#include <xmd/MemoryPool.h>
 
 namespace
 {
@@ -316,11 +316,11 @@ int main(int argc, char *argv[])
             {
                 g_failed.store(true);
             }
-            const auto stats = Kama_memoryPool::MemoryPool::stats();
+            const auto stats = xmd_memoryPool::MemoryPool::stats();
             std::printf("  pool reserved=%.2f MiB cachedPages=%.2f MiB\n",
                         stats.reservedBytes / (1024.0 * 1024.0),
                         stats.cachedPageBytes / (1024.0 * 1024.0));
-            Kama_memoryPool::MemoryPool::releaseUnused();
+            xmd_memoryPool::MemoryPool::releaseUnused();
         }
 
         loop.quit();

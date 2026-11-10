@@ -1,4 +1,4 @@
-#include <kama/MemoryPool.h>
+#include <xmd/MemoryPool.h>
 
 #include <algorithm>
 #include <atomic>
@@ -33,11 +33,11 @@ double run(bool pool, size_t size, int threads, int batches)
             // Warm the allocator on the thread that will actually use it.
             for (int b = 0; b < 8; ++b) {
                 for (auto &p : pointers) {
-                    p = pool ? Kama_memoryPool::MemoryPool::allocate(size) : std::malloc(size);
+                    p = pool ? xmd_memoryPool::MemoryPool::allocate(size) : std::malloc(size);
                     touch(p, size);
                 }
                 for (auto p : pointers) {
-                    if (pool) Kama_memoryPool::MemoryPool::deallocate(p, size);
+                    if (pool) xmd_memoryPool::MemoryPool::deallocate(p, size);
                     else std::free(p);
                 }
             }
@@ -45,11 +45,11 @@ double run(bool pool, size_t size, int threads, int batches)
             while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
             for (int b = 0; b < batches; ++b) {
                 for (auto &p : pointers) {
-                    p = pool ? Kama_memoryPool::MemoryPool::allocate(size) : std::malloc(size);
+                    p = pool ? xmd_memoryPool::MemoryPool::allocate(size) : std::malloc(size);
                     touch(p, size);
                 }
                 for (auto p : pointers) {
-                    if (pool) Kama_memoryPool::MemoryPool::deallocate(p, size);
+                    if (pool) xmd_memoryPool::MemoryPool::deallocate(p, size);
                     else std::free(p);
                 }
             }
@@ -85,7 +85,7 @@ int main()
             std::printf("bytes=%zu threads=%d pool_ms=%.3f system_ms=%.3f pool_Mpairs_s=%.2f system_Mpairs_s=%.2f speedup=%.2f\n",
                         size, threads, pooled[2], system[2], pairs / pooled[2] / 1000,
                         pairs / system[2] / 1000, system[2] / pooled[2]);
-            Kama_memoryPool::MemoryPool::releaseUnused();
+            xmd_memoryPool::MemoryPool::releaseUnused();
         }
     }
     std::puts("Upstream release may disable allocation statistics; zero counters do not prove zero allocations.");

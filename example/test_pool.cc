@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <stdexcept>
-#include "KamaMemory.h"
+#include "XmdMemory.h"
 
 struct alignas(64) Aligned { int value = 42; };
 struct Base { virtual ~Base() = default; };

@@ -3,7 +3,7 @@
 基于 muduo 的 Linux C++ 网络核心，面向后续传输库 / 下载库底座。
 
 - Reactor：`epoll` + One Loop Per Thread
-- 堆分配：接入 [KamaMemoryPool 1.0.0](https://github.com/xmd-hs/my-MemoryPool/releases/tag/v1.0.0)
+- 堆分配：接入 [xmdMemoryPool 2.0.0](https://github.com/xmd-hs/xmdMemoryPool/releases/tag/v2.0.0)
 - 传输向优化：发送背压、`writeComplete` 合并、大缓冲推流、accept 快排空
 
 当前产出静态库 `libmuduo_core.a`（内存池静态包使用 local-exec TLS，不能链进 `.so`）。
@@ -15,9 +15,9 @@
 | 系统 | Linux x86_64（推荐 WSL2 / 原生 Linux） |
 | 编译器 | GCC，C++14 |
 | 构建 | CMake ≥ 3.5 |
-| 第三方 | `third_party/KamaMemoryPool-1.0.0-Linux-x86_64-GNU-static` |
+| 第三方 | `third_party/xmdMemoryPool-2.0.0-Linux-x86_64-GNU-static` |
 
-内存池预编译包来自上游 Release；若目录缺失，从 [v1.0.0](https://github.com/xmd-hs/my-MemoryPool/releases/tag/v1.0.0) 下载 Linux GNU static 包并解压到 `third_party/`。
+内存池预编译包来自上游 Release；若目录缺失，从 [v2.0.0](https://github.com/xmd-hs/xmdMemoryPool/releases/tag/v2.0.0) 下载 Linux GNU static 包并解压到 `third_party/`。
 
 ## 构建
 
@@ -48,7 +48,7 @@ muduo-core/
 ├── src/              # 网络库实现
 ├── transport/        # 云盘上传/下载传输库
 ├── example/          # 回显、压测、云盘示例
-├── third_party/      # KamaMemoryPool 1.0.0 静态 SDK
+├── third_party/      # xmdMemoryPool 2.0.0 静态 SDK
 └── lib/              # 构建输出
 ```
 
@@ -64,7 +64,7 @@ muduo-core/
 
 ## 内存池怎么用
 
-业务侧堆对象与容器走 `include/KamaMemory.h`：
+业务侧堆对象与容器走 `include/XmdMemory.h`：
 
 - `makePoolUnique` / `makePoolShared`
 - `PoolVector` / `PoolString` / `PoolUnorderedMap`
@@ -74,9 +74,12 @@ muduo-core/
 
 ## 性能验证
 
-最新续优化将 sendfile 描述符持有对象和引用控制块从两次系统堆分配合并为一次 Kama 池分配，补充接收回调回归测试；六项 CTest 与传输集成测试通过。这次未证明整体吞吐继续提升，完整五轮结果及撤回的调参实验见性能报告。
+当前依赖已升级为 xmdMemoryPool 2.0.0。下述吞吐与 CPU 对比来自升级前的 KamaMemoryPool 1.0.0，不作为 2.0.0 的性能结果；升级验证见 PERFORMANCE.md。
 
-保留 Kama 内存池的应用适配优化、最新五轮传输前后对比，以及历史分配器 A/B 诊断详见 [PERFORMANCE.md](PERFORMANCE.md)。本轮调整池缓冲区的初始化与大小类别、复用回调批次容量，并保留 TCP 自动调优；不要把分配微基准加速比等同于文件传输加速比。
+
+最新续优化将 sendfile 描述符持有对象和引用控制块从两次系统堆分配合并为一次 xmdMemoryPool 池分配，补充接收回调回归测试；六项 CTest 与传输集成测试通过。这次未证明整体吞吐继续提升，完整五轮结果及撤回的调参实验见性能报告。
+
+保留 xmdMemoryPool 内存池的应用适配优化、最新五轮传输前后对比，以及历史分配器 A/B 诊断详见 [PERFORMANCE.md](PERFORMANCE.md)。本轮调整池缓冲区的初始化与大小类别、复用回调批次容量，并保留 TCP 自动调优；不要把分配微基准加速比等同于文件传输加速比。
 
 传输热路径已减少以下开销：空闲检测使用单调时钟记录活动时间，仅在定时器到期后重新安排检查；控制帧 CRC 校验直接读取接收缓冲区，避免 extra 字段的临时字符串；CRC 表通过 C++ 静态初始化保证多线程首次调用安全；示例客户端的中间进度每 100ms 最多刷新一次，保留最终进度。
 
@@ -178,6 +181,6 @@ python3 example/_run_demo.py
 ## 参考
 
 - 陈硕 muduo：https://github.com/chenshuo/muduo/
-- KamaMemoryPool：https://github.com/xmd-hs/my-MemoryPool
+- xmdMemoryPool：https://github.com/xmd-hs/xmdMemoryPool
 - 《Linux 多线程服务器编程》
 - 《Linux 高性能服务器编程》

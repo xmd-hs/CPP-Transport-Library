@@ -1,11 +1,11 @@
 #pragma once
 
-// Core objects and Pool* containers use KamaMemoryPool by default.
+// Core objects and Pool* containers use xmdMemoryPool by default.
 // MUDUO_USE_MEMORY_POOL=0 switches these wrappers to the standard allocator for A/B tests.
 // 池内部的元数据仍使用系统 operator new，因此这里不替换全局 new/delete。
 
-#include <kama/Allocator.h>
-#include <kama/MemoryPool.h>
+#include <xmd/Allocator.h>
+#include <xmd/MemoryPool.h>
 
 #include <functional>
 #include <memory>
@@ -21,12 +21,12 @@
 #endif
 
 // Byte storage is overwritten by recv/memcpy before it becomes readable. Keep
-// Kama allocation, but avoid vector value-initializing unused buffer capacity.
+// xmdMemoryPool allocation, but avoid vector value-initializing unused buffer capacity.
 template <typename T>
 class UninitializedPoolAllocator
     : public
 #if MUDUO_USE_MEMORY_POOL
-      Kama_memoryPool::Allocator<T>
+      xmd_memoryPool::Allocator<T>
 #else
       std::allocator<T>
 #endif
@@ -53,10 +53,10 @@ struct PoolDeleter
         if (!pointer) return;
         pointer->~T();
         // A polymorphic base pointer may own a larger derived allocation.
-        if (!std::is_polymorphic<T>::value && alignof(T) <= Kama_memoryPool::kAlignment)
-            Kama_memoryPool::MemoryPool::deallocate(pointer, sizeof(T));
+        if (!std::is_polymorphic<T>::value && alignof(T) <= xmd_memoryPool::kAlignment)
+            xmd_memoryPool::MemoryPool::deallocate(pointer, sizeof(T));
         else
-            Kama_memoryPool::MemoryPool::deallocate(pointer);
+            xmd_memoryPool::MemoryPool::deallocate(pointer);
 #else
         delete pointer;
 #endif
@@ -68,7 +68,7 @@ using PoolUniquePtr = std::unique_ptr<T, PoolDeleter>;
 
 template <typename T>
 #if MUDUO_USE_MEMORY_POOL
-using PoolVector = std::vector<T, Kama_memoryPool::Allocator<T>>;
+using PoolVector = std::vector<T, xmd_memoryPool::Allocator<T>>;
 #else
 using PoolVector = std::vector<T>;
 #endif
@@ -76,7 +76,7 @@ using PoolVector = std::vector<T>;
 using PoolString = std::basic_string<char,
                                      std::char_traits<char>,
 #if MUDUO_USE_MEMORY_POOL
-                                     Kama_memoryPool::Allocator<char>>;
+                                     xmd_memoryPool::Allocator<char>>;
 #else
                                      std::allocator<char>>;
 #endif
@@ -88,7 +88,7 @@ using PoolUnorderedMap = std::unordered_map<
     std::hash<Key>,
     std::equal_to<Key>,
 #if MUDUO_USE_MEMORY_POOL
-    Kama_memoryPool::Allocator<std::pair<const Key, T>>>;
+    xmd_memoryPool::Allocator<std::pair<const Key, T>>>;
 #else
     std::allocator<std::pair<const Key, T>>>;
 #endif
@@ -97,7 +97,7 @@ template <typename T, typename... Args>
 PoolUniquePtr<T> makePoolUnique(Args &&...args)
 {
 #if MUDUO_USE_MEMORY_POOL
-    T *object = Kama_memoryPool::MemoryPool::newElement<T>(std::forward<Args>(args)...);
+    T *object = xmd_memoryPool::MemoryPool::newElement<T>(std::forward<Args>(args)...);
 #else
     T *object = new T(std::forward<Args>(args)...);
 #endif
@@ -112,7 +112,7 @@ template <typename T, typename... Args>
 std::shared_ptr<T> makePoolShared(Args &&...args)
 {
 #if MUDUO_USE_MEMORY_POOL
-    return std::allocate_shared<T>(Kama_memoryPool::Allocator<T>(),
+    return std::allocate_shared<T>(xmd_memoryPool::Allocator<T>(),
                                    std::forward<Args>(args)...);
 #else
     return std::make_shared<T>(std::forward<Args>(args)...);

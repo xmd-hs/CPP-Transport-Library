@@ -2,7 +2,7 @@
 
 #include "noncopyable.h"
 #include "Timestamp.h"
-#include "KamaMemory.h"
+#include "XmdMemory.h"
 
 class Channel;
 class EventLoop;

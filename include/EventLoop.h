@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "CurrentThread.h"
-#include "KamaMemory.h"
+#include "XmdMemory.h"
 #include "Timestamp.h"
 #include "noncopyable.h"
 

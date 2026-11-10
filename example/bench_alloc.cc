@@ -1,4 +1,4 @@
-#include <kama/MemoryPool.h>
+#include <xmd/MemoryPool.h>
 
 #include <chrono>
 #include <cstdint>
@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "Buffer.h"
-#include "KamaMemory.h"
+#include "XmdMemory.h"
 
 namespace
 {
@@ -51,13 +51,13 @@ double benchPoolSized(std::size_t size, int rounds)
     const auto begin = Clock::now();
     for (int i = 0; i < rounds; ++i)
     {
-        void *pointer = Kama_memoryPool::MemoryPool::allocate(size);
+        void *pointer = xmd_memoryPool::MemoryPool::allocate(size);
         touchBlock(pointer, size);
         pointers[static_cast<std::size_t>(i)] = pointer;
     }
     for (int i = 0; i < rounds; ++i)
     {
-        Kama_memoryPool::MemoryPool::deallocate(pointers[static_cast<std::size_t>(i)], size);
+        xmd_memoryPool::MemoryPool::deallocate(pointers[static_cast<std::size_t>(i)], size);
     }
     return millis(begin, Clock::now());
 }
@@ -84,9 +84,9 @@ double benchPoolChurn(std::size_t size, int rounds)
     const auto begin = Clock::now();
     for (int i = 0; i < rounds; ++i)
     {
-        void *pointer = Kama_memoryPool::MemoryPool::allocate(size);
+        void *pointer = xmd_memoryPool::MemoryPool::allocate(size);
         touchBlock(pointer, size);
-        Kama_memoryPool::MemoryPool::deallocate(pointer, size);
+        xmd_memoryPool::MemoryPool::deallocate(pointer, size);
     }
     return millis(begin, Clock::now());
 }
@@ -127,7 +127,7 @@ double benchBufferGrow(std::size_t chunk, int rounds)
 
 int main()
 {
-    std::printf("=== download-core alloc bench (KamaMemoryPool 1.0.0) ===\n");
+    std::printf("=== download-core alloc bench (xmdMemoryPool 2.0.0) ===\n");
     std::puts("Legacy single-thread workload; use bench_allocator for repeated multithread comparisons.");
 
     struct Case
@@ -162,7 +162,7 @@ int main()
             mallocMs = benchMallocSized(item.size, item.rounds);
         }
         printRow(item.name, poolMs, mallocMs, static_cast<std::uint64_t>(item.rounds));
-        Kama_memoryPool::MemoryPool::releaseUnused();
+        xmd_memoryPool::MemoryPool::releaseUnused();
     }
 
     const double bufferMs = benchBufferGrow(64 * 1024, 2000);
@@ -173,7 +173,7 @@ int main()
                 bufferMs,
                 bufferGb);
 
-    const auto stats = Kama_memoryPool::MemoryPool::stats();
+    const auto stats = xmd_memoryPool::MemoryPool::stats();
     std::printf("pool reservedBytes=%llu cachedPageBytes=%llu\n",
                 static_cast<unsigned long long>(stats.reservedBytes),
                 static_cast<unsigned long long>(stats.cachedPageBytes));

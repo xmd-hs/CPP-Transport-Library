@@ -1,0 +1,4 @@
+cc0371fea518d7df02543837ff0936b277ddc4a444472978d130a74e7f94678a  xmdMemoryPool-2.0.0-Linux-x86_64-GNU-shared.tar.gz
+37eef9457c3a08f06b8f32996fd5c61f620a4d047a41088ae2eb4a0495457064  xmdMemoryPool-2.0.0-Linux-x86_64-GNU-static.tar.gz
+1aa6c8e651e6d3a98df084ec7bc1a6a179b6905501e723e1f271555b69d0ef46  xmdMemoryPool-2.0.0-Windows-AMD64-MSVC-shared.zip
+e2e0a1b0a672f288be69e87f2bb4ffd14e91e9bc606391b861f0237655c889d4  xmdMemoryPool-2.0.0-Windows-AMD64-MSVC-static.zip

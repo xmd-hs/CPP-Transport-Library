@@ -24,7 +24,7 @@ set(SRC_FILES
     UdpSocket.cc
 )
 
-# 静态库。v1.0.0 的静态内存池使用 local-exec TLS，不能再链进 .so，
+# 静态库。v2.0.0 的静态内存池使用 local-exec TLS，不能再链进 .so，
 # 要和本库一起进最终可执行文件。
 add_library(muduo_core STATIC ${SRC_FILES})
 target_compile_definitions(muduo_core PUBLIC
@@ -33,4 +33,4 @@ target_compile_definitions(muduo_core PUBLIC
 #设置头文件的路径
 target_include_directories(muduo_core PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
-target_link_libraries(muduo_core PUBLIC KamaMemoryPool::memory_pool)
+target_link_libraries(muduo_core PUBLIC xmdMemoryPool::memory_pool)

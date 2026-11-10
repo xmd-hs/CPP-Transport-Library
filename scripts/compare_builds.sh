@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compare two already-built revisions, both retaining the Kama pool.
+# Compare two already-built revisions, both retaining the xmdMemoryPool pool.
 set -euo pipefail
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
     echo "usage: bash scripts/compare_builds.sh /absolute/before/example /absolute/after/example [host]" >&2

@@ -1,5 +1,16 @@
 # 性能诊断记录
 
+## 依赖升级为 xmdMemoryPool 2.0.0（2026-11-10）
+
+当前构建固定使用 `find_package(xmdMemoryPool 2.0.0 EXACT CONFIG REQUIRED)`，迁移到 `<xmd/...>`、`xmd_memoryPool` 和 `xmdMemoryPool::memory_pool`，应用侧适配头改为 `XmdMemory.h`。默认启用内存池，保留分配器 A/B 开关。
+
+Linux GNU static 发布包已与上游 SHA256SUMS-2.0.0.txt 核对，SHA-256 为 `37eef9457c3a08f06b8f32996fd5c61f620a4d047a41088ae2eb4a0495457064`。独立 Linux 目录 Release 构建成功，6 项 CTest、传输集成测试（上传、下载、续传、分段、并行、空文件、拒绝鉴权）及 P2P smoke 文件比对全部通过。
+
+单轮吞吐冒烟检查：WSL / GCC 15.2 / Release / tmpfs，每连接 128 MiB，连接 Linux 接口地址。单连接上传/下载分别为 1288.08 / 1241.15 MiB/s；4 连接聚合上传/下载为 3320.80 / 3508.76 MiB/s，所有 SHA-256 通过。该检查仅用于确认升级后数据路径可用，未与旧版交替比较，不能据此声称升级加速或退步。
+
+下文的性能对比及 benchmarks 历史数据均来自 KamaMemoryPool 1.0.0，不能作为 2.0.0 的测试结果。
+
+
 ## 继续优化：减少文件发送的池外分配
 
 本次保留改动：`sendFile` 原先使用 `new int` 加带自定义删除器的 `shared_ptr`，每次文件发送需要两次系统堆分配。现在通过 `makePoolShared<FileOwner>` 将文件描述符持有对象与引用控制块合并为一次 Kama 分配。对象分配先于 dup，避免分配失败泄漏已复制的描述符；引用跨线程队列与背压等待时仍持有文件，最后一次释放时关闭它。池默认继续开启。
