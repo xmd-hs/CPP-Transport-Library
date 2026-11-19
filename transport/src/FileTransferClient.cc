@@ -211,7 +211,7 @@ void FileTransferClient::downloadParallel(const std::string &remoteRelPath,
         lastMessage_.clear();
     }
 
-    // 先用主连接 Stat，再为每个分片临时建 TcpClient。
+    // 先用主连接 Stat，再为每个分片临时建 TcpClient（分到独立 IO 线程）。
     stat(remoteRelPath, [this, remoteRelPath, localPath, parts, done](bool ok, uint64_t size, const std::string &msg) {
         if (!ok || size == 0)
         {
@@ -243,14 +243,61 @@ void FileTransferClient::downloadParallel(const std::string &remoteRelPath,
         {
             std::unique_ptr<TcpClient> client;
             std::shared_ptr<TransferSession> session;
-            bool finished = false;
-            bool ok = false;
-            std::string message;
+            std::shared_ptr<std::atomic_bool> counted =
+                std::make_shared<std::atomic_bool>(false);
         };
 
-        auto partsState = std::make_shared<std::vector<PartState>>(static_cast<size_t>(parts));
+        struct ParallelJob
+        {
+            std::unique_ptr<EventLoopThreadPool> pool;
+            std::vector<PartState> parts;
+        };
+
+        auto job = std::make_shared<ParallelJob>();
+        const int threads = std::max(1, std::min(parts, 4));
+        job->pool.reset(new EventLoopThreadPool(loop_, name_ + "-parts"));
+        job->pool->setThreadNum(threads);
+        job->pool->start();
+        job->parts.resize(static_cast<size_t>(parts));
+
         auto remain = std::make_shared<std::atomic_int>(parts);
         auto failed = std::make_shared<std::atomic_bool>(false);
+
+        auto finishPart = [this, job, remain, failed, done](bool okPart,
+                                                            TransferErrorCode code,
+                                                            const std::string &m) {
+            if (!okPart)
+            {
+                failed->store(true);
+            }
+            if (remain->fetch_sub(1) != 1)
+            {
+                return;
+            }
+            const bool allOk = !failed->load();
+            if (done)
+            {
+                done(allOk,
+                     allOk ? TransferErrorCode::kOk : code,
+                     allOk ? "download parallel done" : m);
+            }
+            notifyDone(allOk,
+                       allOk ? TransferErrorCode::kOk : code,
+                       allOk ? "download parallel done" : m);
+            // Tear down clients then IO threads on the base loop.
+            loop_->queueInLoop([job]() {
+                for (auto &ps : job->parts)
+                {
+                    ps.client.reset();
+                }
+                job->pool.reset();
+            });
+        };
+
+        auto countOnce = [](PartState &ps) -> bool {
+            bool expected = false;
+            return ps.counted->compare_exchange_strong(expected, true);
+        };
 
         const uint64_t chunk = (size + static_cast<uint64_t>(parts) - 1) / static_cast<uint64_t>(parts);
 
@@ -259,29 +306,31 @@ void FileTransferClient::downloadParallel(const std::string &remoteRelPath,
             const uint64_t offset = static_cast<uint64_t>(i) * chunk;
             if (offset >= size)
             {
-                if (remain->fetch_sub(1) == 1)
-                {
-                    if (done)
-                    {
-                        done(true, TransferErrorCode::kOk, "download parallel done");
-                    }
-                    notifyDone(true, TransferErrorCode::kOk, "download parallel done");
-                }
+                finishPart(true, TransferErrorCode::kOk, "download parallel done");
                 continue;
             }
             const uint64_t length = std::min(chunk, size - offset);
             const size_t idx = static_cast<size_t>(i);
-            (*partsState)[idx].client.reset(
-                new TcpClient(loop_, serverAddr_, name_ + "-p" + std::to_string(i)));
+            EventLoop *ioLoop = job->pool->getNextLoop();
+            job->parts[idx].client.reset(
+                new TcpClient(ioLoop, serverAddr_, name_ + "-p" + std::to_string(i)));
 
-            (*partsState)[idx].client->setConnectionCallback(
-                [this, partsState, idx, remoteRelPath, localPath, offset, length, remain, failed, done](
+            job->parts[idx].client->setConnectionCallback(
+                [this, job, idx, remoteRelPath, localPath, offset, length, finishPart, countOnce](
                     const TcpConnectionPtr &conn) {
+                    auto &ps = job->parts[idx];
                     if (!conn->connected())
                     {
+                        if (ps.session)
+                        {
+                            ps.session->onClosed();
+                        }
+                        else if (countOnce(ps))
+                        {
+                            finishPart(false, TransferErrorCode::kIOError, "part disconnected");
+                        }
                         return;
                     }
-                    auto &ps = (*partsState)[idx];
                     ps.session = makePoolShared<TransferSession>(
                         TransferSession::Role::kClient, conn, std::string(), authToken_, idleTimeoutSec_);
                     if (progressCallback_)
@@ -291,29 +340,16 @@ void FileTransferClient::downloadParallel(const std::string &remoteRelPath,
                     ps.session->startIdleGuard();
                     conn->setContext(ps.session);
                     ps.session->setDoneCallback(
-                        [remain, failed, done, this](bool okPart, TransferErrorCode code, const std::string &m) {
-                            if (!okPart)
+                        [&ps, finishPart, countOnce](bool okPart, TransferErrorCode code, const std::string &m) {
+                            if (countOnce(ps))
                             {
-                                failed->store(true);
-                            }
-                            if (remain->fetch_sub(1) == 1)
-                            {
-                                const bool allOk = !failed->load();
-                                if (done)
-                                {
-                                    done(allOk,
-                                         allOk ? TransferErrorCode::kOk : code,
-                                         allOk ? "download parallel done" : m);
-                                }
-                                notifyDone(allOk,
-                                           allOk ? TransferErrorCode::kOk : code,
-                                           allOk ? "download parallel done" : m);
+                                finishPart(okPart, code, m);
                             }
                         });
                     ps.session->setAuthToken(authToken_);
                     ps.session->startDownload(remoteRelPath, localPath, offset, length);
                 });
-            (*partsState)[idx].client->setMessageCallback(
+            job->parts[idx].client->setMessageCallback(
                 [](const TcpConnectionPtr &c, Buffer *buf, Timestamp) {
                     auto s = c->getContext<TransferSession>();
                     if (s)
@@ -321,7 +357,7 @@ void FileTransferClient::downloadParallel(const std::string &remoteRelPath,
                         s->onMessage(buf);
                     }
                 });
-            (*partsState)[idx].client->connect();
+            job->parts[idx].client->connect();
         }
     });
 }

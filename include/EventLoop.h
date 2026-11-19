@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include "CurrentThread.h"
@@ -22,6 +23,31 @@ public:
     using Functor = std::function<void()>;
     using TimerCallback = std::function<void()>;
 
+    // A worker may hold this lease while performing asynchronous work. It
+    // posts completion through shared state, never through a raw EventLoop*.
+    class AsyncOperation
+    {
+    public:
+        AsyncOperation() = default;
+        ~AsyncOperation();
+        AsyncOperation(const AsyncOperation &) = delete;
+        AsyncOperation &operator=(const AsyncOperation &) = delete;
+        AsyncOperation(AsyncOperation &&other) noexcept;
+        AsyncOperation &operator=(AsyncOperation &&other) noexcept;
+
+        explicit operator bool() const { return static_cast<bool>(state_); }
+        bool post(Functor cb) const;
+
+    private:
+        friend class EventLoop;
+        struct State;
+        explicit AsyncOperation(std::shared_ptr<State> state) : state_(std::move(state)) {}
+        void reset();
+
+        std::shared_ptr<State> state_;
+        mutable std::atomic_bool posted_{false};
+    };
+
     EventLoop();
     ~EventLoop();
 
@@ -32,6 +58,7 @@ public:
 
     void runInLoop(Functor cb);
     void queueInLoop(Functor cb);
+    AsyncOperation beginAsyncOperation();
 
     TimerId runAt(Timestamp time, TimerCallback cb);
     TimerId runAfter(double delaySeconds, TimerCallback cb);
@@ -60,6 +87,7 @@ private:
 
     int wakeupFd_;
     std::atomic_bool wakeupPending_;
+    std::shared_ptr<AsyncOperation::State> asyncState_;
     PoolUniquePtr<Channel> wakeupChannel_;
     PoolUniquePtr<TimerQueue> timerQueue_;
 
@@ -68,5 +96,6 @@ private:
     std::atomic_bool callingPendingFunctors_;
     PoolVector<Functor> pendingFunctors_;
     PoolVector<Functor> runningFunctors_; // retain both batch allocations on the loop thread
+    std::vector<Functor> asyncRunningFunctors_;
     std::mutex mutex_;
 };

@@ -77,7 +77,7 @@ muduo-core/
 当前依赖已升级为 xmdMemoryPool 2.0.0。下述吞吐与 CPU 对比来自升级前的 KamaMemoryPool 1.0.0，不作为 2.0.0 的性能结果；升级验证见 PERFORMANCE.md。
 
 
-最新续优化将 sendfile 描述符持有对象和引用控制块从两次系统堆分配合并为一次 xmdMemoryPool 池分配，补充接收回调回归测试；六项 CTest 与传输集成测试通过。这次未证明整体吞吐继续提升，完整五轮结果及撤回的调参实验见性能报告。
+最新续优化将 sendfile 描述符持有对象和引用控制块从两次系统堆分配合并为一次 xmdMemoryPool 池分配，补充接收回调与磁盘队列/关闭竞态回归测试；七项 CTest 与传输集成测试通过。这次未证明整体吞吐继续提升，完整五轮结果及撤回的调参实验见性能报告。
 
 保留 xmdMemoryPool 内存池的应用适配优化、最新五轮传输前后对比，以及历史分配器 A/B 诊断详见 [PERFORMANCE.md](PERFORMANCE.md)。本轮调整池缓冲区的初始化与大小类别、复用回调批次容量，并保留 TCP 自动调优；不要把分配微基准加速比等同于文件传输加速比。
 
@@ -156,6 +156,10 @@ CTest 包含协议编解码、CRC 标准向量、路径 NUL 拒绝，以及真�
 ./example/cloud_disk_client download  127.0.0.1 9000 docs/a.bin ./out.bin 0 0 mytoken
 ./example/cloud_disk_client pdownload 127.0.0.1 9000 docs/a.bin ./out2.bin 4 mytoken
 ```
+
+上传并发较高时，可在服务端启动环境设置 `MUDUO_DISK_IO_WORKERS=4` 调整异步磁盘写入线程数（默认 2，范围 1～16）。WSL 4 路上传测试中，4 worker 比 2 worker 吞吐更高；真实磁盘收益较小且 CPU 用量会上升，请按实际磁盘和并发负载测量后再调整。客户端可单独设置 worker 数。
+
+异步磁盘队列设有硬上限：未完成写入最多 64 MiB、最多 1024 个操作。达到上限时当前传输返回 busy 并关闭连接，避免慢磁盘或突发并发导致内存无限增长。事件循环关闭时会等待已登记的磁盘操作结束，再丢弃尚未执行的完成回调，避免后台线程访问已关闭的事件循环资源。
 
 产物另含 `example/test_codec`。
 

@@ -142,7 +142,8 @@ void PeerSession::flushUploadQueue()
         char prefix[14];
         encodePiecePrefix(idx, plen, prefix);
         sendRaw(prefix, sizeof(prefix));
-        conn_->sendFile(store_->fd(), store_->pieceOffset(idx), plen);
+        // PieceStore keeps the fd open for the torrent lifetime.
+        conn_->sendFile(store_->fd(), store_->pieceOffset(idx), plen, false);
     }
 }
 
@@ -164,13 +165,20 @@ void PeerSession::replyPiece(uint32_t index)
     char prefix[14];
     encodePiecePrefix(index, plen, prefix);
     sendRaw(prefix, sizeof(prefix));
-    conn_->sendFile(store_->fd(), store_->pieceOffset(index), plen);
+    conn_->sendFile(store_->fd(), store_->pieceOffset(index), plen, false);
 }
 
 void PeerSession::onMessage(Buffer *buf)
 {
-    recvBuf_.append(buf->peek(), buf->readableBytes());
-    buf->retrieveAll();
+    if (recvBuf_.readableBytes() == 0)
+    {
+        recvBuf_.swap(*buf);
+    }
+    else
+    {
+        recvBuf_.append(buf->peek(), buf->readableBytes());
+        buf->retrieveAll();
+    }
 
     size_t offset = 0;
     PeerFrame frame;

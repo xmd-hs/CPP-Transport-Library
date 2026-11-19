@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "Codec.h"
+#include "DiskIoPool.h"
 #include "EventLoop.h"
 #include "Logger.h"
 #include "Protocol.h"
@@ -34,6 +35,11 @@ TransferSession::TransferSession(Role role,
     , fileSize_(0)
     , sessionTotal_(0)
     , transferred_(0)
+    , nextWriteOffset_(0)
+    , pendingDiskBytes_(0)
+    , pendingDiskOps_(0)
+    , diskClosing_(false)
+    , readingPaused_(false)
     , upload_(false)
     , finished_(false)
 {
@@ -52,6 +58,14 @@ void TransferSession::closeFile()
     {
         ::close(fileFd_);
         fileFd_ = -1;
+    }
+    pendingDiskBytes_ = 0;
+    pendingDiskOps_ = 0;
+    diskClosing_ = false;
+    if (readingPaused_ && conn_)
+    {
+        conn_->resumeReading();
+        readingPaused_ = false;
     }
 }
 
@@ -121,12 +135,20 @@ void TransferSession::onIdleTimeout()
     }
 }
 
-void TransferSession::reportProgress()
+void TransferSession::reportProgress(bool force)
 {
     if (!progressCallback_)
     {
         return;
     }
+    const auto now = std::chrono::steady_clock::now();
+    if (!force &&
+        transferred_ < sessionTotal_ &&
+        now - lastProgressReport_ < std::chrono::milliseconds(100))
+    {
+        return;
+    }
+    lastProgressReport_ = now;
     TransferProgress p;
     p.path = path_;
     p.transferred = transferred_;
@@ -135,9 +157,238 @@ void TransferSession::reportProgress()
     progressCallback_(p);
 }
 
+void TransferSession::updateReadPressure()
+{
+    if (!conn_)
+    {
+        return;
+    }
+    if (pendingDiskBytes_ >= kDiskHighWater)
+    {
+        if (!readingPaused_)
+        {
+            conn_->pauseReading();
+            readingPaused_ = true;
+        }
+    }
+    else if (pendingDiskBytes_ <= kDiskLowWater)
+    {
+        if (readingPaused_)
+        {
+            conn_->resumeReading();
+            readingPaused_ = false;
+        }
+    }
+}
+
+void TransferSession::sendFrame(MessageType type,
+                                const std::string &extra,
+                                const void *body,
+                                size_t bodyLen,
+                                uint64_t offset,
+                                uint64_t fileSize,
+                                uint16_t flags)
+{
+    if (!conn_ || !conn_->connected())
+    {
+        return;
+    }
+    Buffer out;
+    Codec::appendFrame(&out, type, extra, body, bodyLen, offset, fileSize, flags);
+    conn_->send(std::move(out));
+}
+
+void TransferSession::queueDiskWrite(const char *data, size_t n)
+{
+    if (n == 0 || fileFd_ < 0 || !conn_)
+    {
+        return;
+    }
+    auto payload = makePoolShared<PoolString>(data, n);
+    const off_t off = static_cast<off_t>(nextWriteOffset_);
+    nextWriteOffset_ += n;
+    pendingDiskBytes_ += n;
+    ++pendingDiskOps_;
+    updateReadPressure();
+    touch();
+
+    const bool queued = DiskIoPool::instance().pwrite(
+        conn_->getLoop(),
+        fileFd_,
+        payload,
+        off,
+        [self = shared_from_this(), n](ssize_t wrote, int err) {
+            self->onDiskWriteDone(n, wrote, err);
+        });
+    if (!queued)
+    {
+        if (pendingDiskOps_ > 0)
+        {
+            --pendingDiskOps_;
+        }
+        pendingDiskBytes_ = pendingDiskBytes_ >= n ? pendingDiskBytes_ - n : 0;
+        nextWriteOffset_ -= n;
+        updateReadPressure();
+        if (role_ == Role::kServer)
+        {
+            sendError(TransferErrorCode::kBusy, "disk write queue full");
+        }
+        else
+        {
+            finish(false, TransferErrorCode::kBusy, "disk write queue full");
+        }
+        if (conn_)
+        {
+            conn_->pauseReading();
+            conn_->shutdown();
+        }
+    }
+}
+
+void TransferSession::onDiskWriteDone(size_t expected, ssize_t wrote, int err)
+{
+    if (pendingDiskOps_ > 0)
+    {
+        --pendingDiskOps_;
+    }
+    if (pendingDiskBytes_ >= expected)
+    {
+        pendingDiskBytes_ -= expected;
+    }
+    else
+    {
+        pendingDiskBytes_ = 0;
+    }
+    updateReadPressure();
+
+    if (finished_ || diskClosing_)
+    {
+        if (diskClosing_ && pendingDiskOps_ == 0)
+        {
+            closeFile();
+        }
+        return;
+    }
+
+    if (wrote < 0 || static_cast<size_t>(wrote) != expected || err != 0)
+    {
+        if (role_ == Role::kServer)
+        {
+            sendError(TransferErrorCode::kIOError, "write failed");
+        }
+        else
+        {
+            finish(false, TransferErrorCode::kIOError, "local write failed");
+        }
+        return;
+    }
+
+    transferred_ += expected;
+    reportProgress();
+    touch();
+
+    if (transferred_ >= sessionTotal_ && pendingDiskOps_ == 0)
+    {
+        completeAfterDisk();
+        return;
+    }
+
+    // Bytes may remain in inputBuffer_ after we hit disk high-water; keep draining.
+    if (conn_ && conn_->inputBufferBytes() > 0)
+    {
+        if (state_ == State::kServerReceivingUpload)
+        {
+            consumeUploadData(conn_->mutableInputBuffer());
+        }
+        else if (state_ == State::kClientReceivingDownload)
+        {
+            consumeDownloadData(conn_->mutableInputBuffer());
+        }
+    }
+}
+
+void TransferSession::completeAfterDisk()
+{
+    if (finished_ || fileFd_ < 0 || !conn_)
+    {
+        return;
+    }
+    ++pendingDiskOps_;
+    const int fd = fileFd_;
+    const bool queued = DiskIoPool::instance().fsync(
+        conn_->getLoop(), fd, [self = shared_from_this()](int err) {
+        if (self->pendingDiskOps_ > 0)
+        {
+            --self->pendingDiskOps_;
+        }
+        if (self->finished_)
+        {
+            if (self->diskClosing_ && self->pendingDiskOps_ == 0)
+            {
+                self->closeFile();
+            }
+            return;
+        }
+        if (err != 0)
+        {
+            if (self->role_ == Role::kServer)
+            {
+                self->sendError(TransferErrorCode::kIOError, "fsync failed");
+            }
+            else
+            {
+                self->finish(false, TransferErrorCode::kIOError, "local fsync failed");
+            }
+            return;
+        }
+        if (self->state_ == State::kServerReceivingUpload)
+        {
+            self->sendFrame(MessageType::kUploadDone,
+                            self->path_,
+                            nullptr,
+                            0,
+                            self->offset_,
+                            self->fileSize_,
+                            kFlagFinal);
+            self->finish(true, TransferErrorCode::kOk, "upload done");
+        }
+        else if (self->state_ == State::kClientReceivingDownload)
+        {
+            self->finish(true, TransferErrorCode::kOk, "download done");
+        }
+        });
+    if (!queued)
+    {
+        if (pendingDiskOps_ > 0)
+        {
+            --pendingDiskOps_;
+        }
+        if (role_ == Role::kServer)
+        {
+            sendError(TransferErrorCode::kBusy, "disk sync queue full");
+        }
+        else
+        {
+            finish(false, TransferErrorCode::kBusy, "disk sync queue full");
+        }
+        if (conn_)
+        {
+            conn_->pauseReading();
+            conn_->shutdown();
+        }
+    }
+}
+
 void TransferSession::resetToIdle()
 {
-    closeFile();
+    if (pendingDiskOps_ > 0)
+    {
+        diskClosing_ = true;
+    }
+    else
+    {
+        closeFile();
+    }
     state_ = State::kIdle;
     finished_ = false;
     path_.clear();
@@ -145,6 +396,7 @@ void TransferSession::resetToIdle()
     fileSize_ = 0;
     sessionTotal_ = 0;
     transferred_ = 0;
+    nextWriteOffset_ = 0;
     statCallback_ = nullptr;
     if (conn_)
     {
@@ -160,19 +412,47 @@ void TransferSession::finish(bool ok, TransferErrorCode code, const std::string 
         return;
     }
     cancelIdleTimer();
-    closeFile();
+    const bool diskOpsPending = pendingDiskOps_ > 0;
+    if (diskOpsPending)
+    {
+        diskClosing_ = true;
+    }
+    else
+    {
+        closeFile();
+    }
     if (conn_)
     {
         conn_->setWriteCompleteCallback(WriteCompleteCallback());
+        // A failed transfer with outstanding disk operations cannot safely
+        // reuse this session: their callbacks still refer to this fd/state.
+        if (!ok && diskOpsPending)
+        {
+            conn_->pauseReading();
+            conn_->shutdown();
+        }
     }
 
     const auto cb = doneCallback_;
     // 服务端与客户端成功后都回到 Idle，支持同连接多次传输。
-    resetToIdle();
-    if (!ok && role_ == Role::kClient)
+    // resetToIdle 会再碰一次 close；pending 时只标记 diskClosing_。
+    state_ = State::kIdle;
+    path_.clear();
+    offset_ = 0;
+    fileSize_ = 0;
+    sessionTotal_ = 0;
+    transferred_ = 0;
+    nextWriteOffset_ = 0;
+    finished_ = false;
+    statCallback_ = nullptr;
+    if (!ok && (role_ == Role::kClient || diskOpsPending))
     {
         state_ = State::kFinished;
         finished_ = true;
+    }
+    else
+    {
+        armIdleTimer();
     }
     if (cb)
     {
@@ -184,9 +464,8 @@ void TransferSession::sendError(TransferErrorCode code, const std::string &messa
 {
     if (conn_ && conn_->connected())
     {
-        const std::string frame = Codec::encodeFrame(
-            MessageType::kError, "", message.data(), message.size(), static_cast<uint64_t>(code), 0);
-        conn_->send(frame);
+        sendFrame(MessageType::kError, "", message.data(), message.size(),
+                  static_cast<uint64_t>(code), 0);
     }
     finish(false, code, message);
 }
@@ -324,9 +603,13 @@ void TransferSession::handleClientFrame(const DecodedFrame &frame)
         fileSize_ = frame.header.fileSize;
         offset_ = frame.header.offset;
         transferred_ = 0;
+        nextWriteOffset_ = offset_;
+        pendingDiskBytes_ = 0;
+        pendingDiskOps_ = 0;
+        diskClosing_ = false;
         upload_ = false;
         state_ = State::kClientReceivingDownload;
-        reportProgress();
+        reportProgress(true);
         return;
     }
 
@@ -404,10 +687,14 @@ void TransferSession::beginServerUpload(const std::string &relPath,
     fileSize_ = fileSize;
     sessionTotal_ = fileSize - offset;
     transferred_ = 0;
+    nextWriteOffset_ = offset;
+    pendingDiskBytes_ = 0;
+    pendingDiskOps_ = 0;
+    diskClosing_ = false;
     upload_ = true;
     finished_ = false;
     state_ = State::kServerReceivingUpload;
-    reportProgress();
+    reportProgress(true);
 }
 
 void TransferSession::beginServerDownload(const std::string &relPath,
@@ -456,16 +743,18 @@ void TransferSession::beginServerDownload(const std::string &relPath,
     fileSize_ = total;
     sessionTotal_ = toSend;
     transferred_ = 0;
+    nextWriteOffset_ = offset;
+    pendingDiskBytes_ = 0;
+    pendingDiskOps_ = 0;
+    diskClosing_ = false;
     upload_ = false;
     finished_ = false;
     state_ = State::kServerSendingDownload;
 
-    const std::string resp = Codec::encodeFrame(
-        MessageType::kDownloadResp, "", nullptr, toSend, offset, total, kFlagFinal);
-    conn_->send(resp);
+    sendFrame(MessageType::kDownloadResp, "", nullptr, toSend, offset, total, kFlagFinal);
     conn_->setWriteCompleteCallback(
         [self = shared_from_this()](const TcpConnectionPtr &) { self->onWriteComplete(); });
-    reportProgress();
+    reportProgress(true);
     pumpServerDownload();
 }
 
@@ -483,73 +772,54 @@ void TransferSession::beginServerStat(const std::string &relPath)
         sendError(TransferErrorCode::kNotFound, "file not found");
         return;
     }
-    const std::string resp = Codec::encodeFrame(
-        MessageType::kStatResp,
-        protocol::encodeExtra(std::string(), relPath),
-        nullptr,
-        0,
-        0,
-        static_cast<uint64_t>(st.st_size));
-    conn_->send(resp);
+    sendFrame(MessageType::kStatResp,
+              protocol::encodeExtra(std::string(), relPath),
+              nullptr,
+              0,
+              0,
+              static_cast<uint64_t>(st.st_size));
 }
 
 void TransferSession::consumeUploadData(Buffer *buf)
 {
-    while (transferred_ < sessionTotal_ && buf->readableBytes() > 0)
+    if (sessionTotal_ == 0)
     {
-        const size_t n = static_cast<size_t>(
-            std::min<uint64_t>(sessionTotal_ - transferred_, buf->readableBytes()));
-        const ssize_t w = ::write(fileFd_, buf->peek(), n);
-        if (w < 0)
+        if (pendingDiskOps_ == 0)
         {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            sendError(TransferErrorCode::kIOError, "write failed");
-            return;
+            completeAfterDisk();
         }
-        buf->retrieve(static_cast<size_t>(w));
-        transferred_ += static_cast<uint64_t>(w);
-        reportProgress();
+        return;
     }
-
-    if (transferred_ >= sessionTotal_)
+    // Queue as much as the disk high-water allows; pwrite runs off-loop.
+    while (transferred_ + pendingDiskBytes_ < sessionTotal_ &&
+           buf->readableBytes() > 0 &&
+           pendingDiskBytes_ < kDiskHighWater)
     {
-        ::fsync(fileFd_);
-        closeFile();
-        const std::string done = Codec::encodeFrame(
-            MessageType::kUploadDone, path_, nullptr, 0, offset_, fileSize_, kFlagFinal);
-        conn_->send(done);
-        finish(true, TransferErrorCode::kOk, "upload done");
+        const size_t n = static_cast<size_t>(std::min<uint64_t>(
+            sessionTotal_ - transferred_ - pendingDiskBytes_, buf->readableBytes()));
+        queueDiskWrite(buf->peek(), n);
+        buf->retrieve(n);
     }
 }
 
 void TransferSession::consumeDownloadData(Buffer *buf)
 {
-    while (transferred_ < sessionTotal_ && buf->readableBytes() > 0)
+    if (sessionTotal_ == 0)
     {
-        const size_t n = static_cast<size_t>(
-            std::min<uint64_t>(sessionTotal_ - transferred_, buf->readableBytes()));
-        const ssize_t w = ::write(fileFd_, buf->peek(), n);
-        if (w < 0)
+        if (pendingDiskOps_ == 0)
         {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            finish(false, TransferErrorCode::kIOError, "local write failed");
-            return;
+            completeAfterDisk();
         }
-        buf->retrieve(static_cast<size_t>(w));
-        transferred_ += static_cast<uint64_t>(w);
-        reportProgress();
+        return;
     }
-
-    if (transferred_ >= sessionTotal_)
+    while (transferred_ + pendingDiskBytes_ < sessionTotal_ &&
+           buf->readableBytes() > 0 &&
+           pendingDiskBytes_ < kDiskHighWater)
     {
-        ::fsync(fileFd_);
-        finish(true, TransferErrorCode::kOk, "download done");
+        const size_t n = static_cast<size_t>(std::min<uint64_t>(
+            sessionTotal_ - transferred_ - pendingDiskBytes_, buf->readableBytes()));
+        queueDiskWrite(buf->peek(), n);
+        buf->retrieve(n);
     }
 }
 
@@ -561,7 +831,7 @@ void TransferSession::pumpServerDownload()
     }
     if (transferred_ >= sessionTotal_)
     {
-        if (conn_->outputBufferBytes() == 0 && !conn_->isWriting())
+        if (conn_->outputBufferBytes() == 0 && !conn_->isWriting() && !conn_->isSendingFile())
         {
             finish(true, TransferErrorCode::kOk, "download done");
         }
@@ -570,9 +840,9 @@ void TransferSession::pumpServerDownload()
 
     const uint64_t left = sessionTotal_ - transferred_;
     const off_t off = static_cast<off_t>(offset_ + transferred_);
-    conn_->sendFile(fileFd_, off, static_cast<size_t>(left));
+    conn_->sendFile(fileFd_, off, static_cast<size_t>(left), false);
     transferred_ = sessionTotal_;
-    reportProgress();
+    reportProgress(true);
 }
 
 void TransferSession::onWriteComplete()
@@ -581,7 +851,9 @@ void TransferSession::onWriteComplete()
     if (state_ == State::kServerSendingDownload)
     {
         if (transferred_ >= sessionTotal_ &&
-            conn_->outputBufferBytes() == 0 && !conn_->isWriting())
+            conn_->outputBufferBytes() == 0 &&
+            !conn_->isWriting() &&
+            !conn_->isSendingFile())
         {
             finish(true, TransferErrorCode::kOk, "download done");
         }
@@ -635,17 +907,19 @@ void TransferSession::startUpload(const std::string &localPath,
     fileSize_ = static_cast<uint64_t>(st.st_size);
     sessionTotal_ = fileSize_ - offset;
     transferred_ = 0;
+    nextWriteOffset_ = offset;
+    pendingDiskBytes_ = 0;
+    pendingDiskOps_ = 0;
+    diskClosing_ = false;
     upload_ = true;
     finished_ = false;
     state_ = State::kClientSendingUpload;
 
     const std::string extra = protocol::encodeExtra(authToken_, normalized);
-    const std::string req =
-        Codec::encodeFrame(MessageType::kUploadReq, extra, nullptr, 0, offset, fileSize_);
-    conn_->send(req);
+    sendFrame(MessageType::kUploadReq, extra, nullptr, 0, offset, fileSize_);
     conn_->setWriteCompleteCallback(
         [self = shared_from_this()](const TcpConnectionPtr &) { self->onWriteComplete(); });
-    reportProgress();
+    reportProgress(true);
     pumpClientUpload();
 }
 
@@ -656,12 +930,11 @@ void TransferSession::pumpClientUpload()
     {
         return;
     }
-    // Enqueue one file range, avoiding a completion callback and descriptor
-    // duplication per MiB. TcpConnection bounds each actual sendfile syscall.
+    // One range per connection; session keeps fileFd_ alive (no dup).
     const size_t count = static_cast<size_t>(sessionTotal_ - transferred_);
-    conn_->sendFile(fileFd_, static_cast<off_t>(offset_ + transferred_), count);
+    conn_->sendFile(fileFd_, static_cast<off_t>(offset_ + transferred_), count, false);
     transferred_ += count;
-    reportProgress();
+    reportProgress(true);
 }
 
 void TransferSession::startDownload(const std::string &remoteRelPath,
@@ -701,15 +974,17 @@ void TransferSession::startDownload(const std::string &remoteRelPath,
     fileSize_ = 0;
     sessionTotal_ = 0;
     transferred_ = 0;
+    nextWriteOffset_ = offset;
+    pendingDiskBytes_ = 0;
+    pendingDiskOps_ = 0;
+    diskClosing_ = false;
     upload_ = false;
     finished_ = false;
     state_ = State::kClientWaitDownloadResp;
 
     const std::string extra = protocol::encodeExtra(authToken_, normalized);
-    const std::string req =
-        Codec::encodeFrame(MessageType::kDownloadReq, extra, nullptr, length, offset, 0);
-    conn_->send(req);
-    reportProgress();
+    sendFrame(MessageType::kDownloadReq, extra, nullptr, length, offset, 0);
+    reportProgress(true);
 }
 
 void TransferSession::startStat(const std::string &remoteRelPath,
@@ -736,8 +1011,7 @@ void TransferSession::startStat(const std::string &remoteRelPath,
     state_ = State::kClientWaitStatResp;
     statCallback_ = std::move(cb);
     const std::string extra = protocol::encodeExtra(authToken_, normalized);
-    const std::string req = Codec::encodeFrame(MessageType::kStatReq, extra, nullptr, 0, 0, 0);
-    conn_->send(req);
+    sendFrame(MessageType::kStatReq, extra, nullptr, 0, 0, 0);
 }
 
 } // namespace transport

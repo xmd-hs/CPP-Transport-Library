@@ -3,10 +3,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <sys/types.h>
 
 #include "Callbacks.h"
+#include "Protocol.h"
 #include "TimerId.h"
 #include "TransferCallbacks.h"
 
@@ -72,7 +75,7 @@ private:
     void sendError(TransferErrorCode code, const std::string &message);
     void finish(bool ok, TransferErrorCode code, const std::string &message);
     void closeFile();
-    void reportProgress();
+    void reportProgress(bool force = false);
     void armIdleTimer();
     void cancelIdleTimer();
     void onIdleTimeout();
@@ -91,6 +94,18 @@ private:
     void pumpServerDownload();
     void resetToIdle();
 
+    void sendFrame(MessageType type,
+                   const std::string &extra,
+                   const void *body,
+                   size_t bodyLen,
+                   uint64_t offset,
+                   uint64_t fileSize,
+                   uint16_t flags = kFlagNone);
+    void queueDiskWrite(const char *data, size_t n);
+    void onDiskWriteDone(size_t expected, ssize_t wrote, int err);
+    void completeAfterDisk();
+    void updateReadPressure();
+
     Role role_;
     TcpConnectionPtr conn_;
     std::string rootDir_;
@@ -99,12 +114,18 @@ private:
     State state_;
     TimerId idleTimer_;
     std::chrono::steady_clock::time_point lastActivity_;
+    std::chrono::steady_clock::time_point lastProgressReport_;
 
     int fileFd_;
     uint64_t offset_;
     uint64_t fileSize_;
     uint64_t sessionTotal_;
     uint64_t transferred_;
+    uint64_t nextWriteOffset_;
+    size_t pendingDiskBytes_;
+    int pendingDiskOps_;
+    bool diskClosing_;
+    bool readingPaused_;
     std::string path_;
     bool upload_;
 
@@ -112,6 +133,9 @@ private:
     TransferDoneCallback doneCallback_;
     std::function<void(bool, uint64_t, const std::string &)> statCallback_;
     std::atomic_bool finished_;
+
+    static constexpr size_t kDiskHighWater = 4 * 1024 * 1024;
+    static constexpr size_t kDiskLowWater = 1 * 1024 * 1024;
 };
 
 } // namespace transport

@@ -4,7 +4,7 @@
 
 当前构建固定使用 `find_package(xmdMemoryPool 2.0.0 EXACT CONFIG REQUIRED)`，迁移到 `<xmd/...>`、`xmd_memoryPool` 和 `xmdMemoryPool::memory_pool`，应用侧适配头改为 `XmdMemory.h`。默认启用内存池，保留分配器 A/B 开关。
 
-Linux GNU static 发布包已与上游 SHA256SUMS-2.0.0.txt 核对，SHA-256 为 `37eef9457c3a08f06b8f32996fd5c61f620a4d047a41088ae2eb4a0495457064`。独立 Linux 目录 Release 构建成功，6 项 CTest、传输集成测试（上传、下载、续传、分段、并行、空文件、拒绝鉴权）及 P2P smoke 文件比对全部通过。
+Linux GNU static 发布包已与上游 SHA256SUMS-2.0.0.txt 核对，SHA-256 为 `37eef9457c3a08f06b8f32996fd5c61f620a4d047a41088ae2eb4a0495457064`。独立 Linux 目录 Release 构建成功，7 项 CTest、传输集成测试（上传、下载、续传、分段、并行、空文件、拒绝鉴权）及 P2P smoke 文件比对全部通过。
 
 单轮吞吐冒烟检查：WSL / GCC 15.2 / Release / tmpfs，每连接 128 MiB，连接 Linux 接口地址。单连接上传/下载分别为 1288.08 / 1241.15 MiB/s；4 连接聚合上传/下载为 3320.80 / 3508.76 MiB/s，所有 SHA-256 通过。该检查仅用于确认升级后数据路径可用，未与旧版交替比较，不能据此声称升级加速或退步。
 
@@ -28,7 +28,28 @@ Linux GNU static 发布包已与上游 SHA256SUMS-2.0.0.txt 核对，SHA-256 为
 
 测试过但已撤回的三种调参：接收事件分批连续读取至 1 MiB、全局 sendfile 上限从 1 MiB 改为 4 MiB、仅上传客户端改为 4 MiB。它们的五轮结果有明显场景退步或收益不稳定，未进入最终代码。原始数据分别为 `benchmarks/receive-batching.json`、`benchmarks/sendfile-batching.json`、`benchmarks/upload-batching.json`。最终维持原接收预算和每次 sendfile 的 1 MiB 上限。
 
-最终六项 CTest 全通过（新增接收未消费字节保留与回调关闭连接测试）；上传、续传、下载、首段保留尾部、三轮并行下载、空文件和鉴权拒绝集成测试全部通过。需要在真实磁盘、跨机网络与持续负载下测量后，再判断下一步吞吐与尾延迟瓶颈。
+最新七项 CTest 全通过（包括磁盘队列上限与事件循环关闭回归）；上传、续传、下载、首段保留尾部、三轮并行下载、空文件和鉴权拒绝集成测试全部通过。需要在真实磁盘、跨机网络与持续负载下测量后，再判断下一步吞吐与尾延迟瓶颈。
+
+## 异步磁盘池 worker 调优（2026-11-19）
+
+`DiskIoPool` 现在可通过进程环境变量 `MUDUO_DISK_IO_WORKERS` 设置 1～16 个 worker；默认仍为 2，非法值回退到 2。变量在进程首次执行磁盘任务时读取。服务端接收上传时，可用 `MUDUO_DISK_IO_WORKERS=4 ./example/cloud_disk_server ...` 做并发上传调优；客户端进程可独立选择 worker 数。
+
+池的未完成任务还有保护上限：最多 64 MiB 和 1024 个操作（两者任一达到即拒绝新任务）。传输层会把拒绝报告为 `busy` 并关闭当前传输；事件循环关闭时会等待已登记的磁盘操作结束，再丢弃未执行回调，避免后台线程访问已关闭的 eventfd。上限是稳定性保护，不代表任何特定磁盘的最佳并发参数。
+
+WSL2 / GCC 15.2 / Release / `/dev/shm`，连接 Linux 接口地址，4 个客户端各传 128 MiB，五轮交替测试的上传吞吐中位数为 2 worker 3585.75 MiB/s、4 worker 4975.78 MiB/s（+38.8%）；合计进程 CPU 中位数为 0.4063 秒和 0.4303 秒（+5.9%）。全部样本 SHA-256 通过。该收益来自单机 tmpfs 测试，不能外推到真实磁盘或其他并发度；单连接没有稳定收益，因此默认保留 2，可按生产负载测量后调整。
+
+复现并只调服务端 worker：
+
+```bash
+python3 scripts/bench_transfer.py --host <linux-ip> --size-mib 128 --clients 4 \
+  --work-dir /dev/shm --server-disk-workers 4
+```
+
+基准也可用 `--client-disk-workers 4` 单独调客户端落盘线程、用 `--server-io-threads 4` 调服务端 Reactor 数。异步完成通知会合并 eventfd 唤醒，降低多个 worker 短时间完成时的重复 `write` 系统调用。4 路、每客户端 256 MiB 的 WSL `/dev/shm` 交错对比含明显冷启动和调度波动，吞吐与 CPU 没有稳定的可归因变化；因此不宣称带宽提升，也不调整默认 worker 数。每个样本 SHA-256 均通过，专门回归覆盖多个线程并发投递后所有回调均被执行。
+
+较大的 worker 调优复测：WSL2 / GCC 15.2 / Release / 4 路上传，`/dev/shm` 每客户端 512 MiB、ext4 工作目录每客户端 256 MiB，交错运行并校验 SHA-256。tmpfs 上传吞吐中位数为 2 worker 3480 MiB/s（4 个有效样本）、4 worker 5067 MiB/s（3 个有效样本，+46%），CPU 中位数 1.73 秒与 1.88 秒（+8%）；ext4 小样本中位数为 1060 与 1137 MiB/s（各 2 个样本，+7%），CPU 1.26 与 1.45 秒（+15%）。这支持在 4 路及以上并发上传时试用 `MUDUO_DISK_IO_WORKERS=4`，不支持对所有磁盘/负载提高默认值。下载由客户端落盘 worker 控制，服务端 worker 数变化没有稳定影响。
+
+同一 ext4 环境把服务端 Reactor 数从 1 扫到 4，下载吞吐都在约 1.18～1.23 GiB/s；上传只有两轮/配置且受冷启动影响，不能证明某个线程数更快，因此保留默认 2。
 
 
 ## 最新：直接地址下的传输优化（2026-11-09）

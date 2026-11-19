@@ -1,6 +1,7 @@
 set(TRANSPORT_SRCS
-    src/Protocol.cc
+    src/ProtocolPosix.cc
     src/Codec.cc
+    src/DiskIoPool.cc
     src/TransferSession.cc
     src/FileTransferServer.cc
     src/FileTransferClient.cc
@@ -15,6 +16,15 @@ set(TRANSPORT_SRCS
     p2p/src/TorrentSession.cc
 )
 
+add_library(transport_wire STATIC src/ProtocolWire.cc)
+target_include_directories(transport_wire
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(MSVC)
+    target_compile_options(transport_wire PRIVATE /utf-8)
+endif()
+
 add_library(transport STATIC ${TRANSPORT_SRCS})
 
 target_include_directories(transport
@@ -26,10 +36,10 @@ target_include_directories(transport
 
 find_package(OpenSSL)
 if(OpenSSL_FOUND)
-    target_link_libraries(transport PUBLIC muduo_core ${LIBS} OpenSSL::Crypto)
+    target_link_libraries(transport PUBLIC transport_wire muduo_core ${LIBS} OpenSSL::Crypto)
     target_compile_definitions(transport PUBLIC P2P_HAVE_OPENSSL=1)
 else()
-    target_link_libraries(transport PUBLIC muduo_core ${LIBS})
+    target_link_libraries(transport PUBLIC transport_wire muduo_core ${LIBS})
 endif()
 target_compile_options(transport PRIVATE -Wall)
 

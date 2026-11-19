@@ -18,3 +18,4 @@
 __pycache__/
 *.log
 /example/test_receive
+/example/test_disk_io

@@ -38,17 +38,29 @@ public:
 
     bool connected() const { return state_ == kConnected; }
     bool isWriting() const;
+    bool isReading() const { return reading_; }
     bool isSendingFile() const { return sendFileRemaining_ > 0; }
     // Access on the connection's loop thread, like outputBufferBytes().
     std::chrono::steady_clock::time_point lastFileWriteTime() const { return lastFileWriteTime_; }
     size_t outputBufferBytes() const { return outputBuffer_.readableBytes(); }
+    size_t inputBufferBytes() const { return inputBuffer_.readableBytes(); }
+    // Loop-thread only: resume consume after async disk drains.
+    Buffer *mutableInputBuffer() { return &inputBuffer_; }
     size_t highWaterMark() const { return highWaterMark_; }
 
     // 发送数据。同线程直接写，避免先拷成 string。
     void send(const std::string &buf);
     void send(const void *data, size_t len);
-    // Owns a duplicate until completion. One file send may be in flight per connection.
-    void sendFile(int fileDescriptor, off_t offset, size_t count);
+    // 移动 Buffer，避免控制帧先转成 string 再拷贝。
+    void send(Buffer &&buf);
+    // duplicate=true：dup 一份 fd，调用方可以立刻 close。
+    // duplicate=false：不 dup，调用方须保证发送完成前 fd 有效（会话持有文件时用）。
+    // 每连接同时只能有一段 in-flight sendfile。
+    void sendFile(int fileDescriptor, off_t offset, size_t count, bool duplicate = true);
+
+    // 接收背压：磁盘写不过来时暂停读，低水位后再开。
+    void pauseReading();
+    void resumeReading();
 
     // 关闭半连接
     void shutdown();
@@ -96,6 +108,7 @@ private:
     void handleError();
 
     void sendInLoop(const void *data, size_t len);
+    void sendBufferInLoop(Buffer &&buf);
     // 跨线程发送时，把数据的所有权留在回调里，避免调用方缓冲区先被释放。
     void sendOwnedInLoop(const std::shared_ptr<PoolString> &message);
     void shutdownInLoop();

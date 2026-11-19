@@ -97,6 +97,13 @@ public:
         memcpy(begin() + readerIndex_, d, len);
     }
 
+    void swap(Buffer &rhs)
+    {
+        buffer_.swap(rhs.buffer_);
+        std::swap(readerIndex_, rhs.readerIndex_);
+        std::swap(writerIndex_, rhs.writerIndex_);
+    }
+
     // 从fd上读取数据
     ssize_t readFd(int fd, int *saveErrno);
     // 通过fd发送数据

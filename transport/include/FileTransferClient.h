@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "EventLoopThreadPool.h"
 #include "InetAddress.h"
 #include "TcpClient.h"
 #include "TransferCallbacks.h"

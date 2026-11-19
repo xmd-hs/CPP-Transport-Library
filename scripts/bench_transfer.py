@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import resource
+import shutil
 from pathlib import Path
 import socket
 import subprocess
@@ -37,13 +38,33 @@ def main():
                         default=Path(__file__).resolve().parents[1] / 'example')
     parser.add_argument('--size-mib', type=int, default=64)
     parser.add_argument('--clients', type=int, default=4)
+    parser.add_argument('--mode', choices=('both', 'upload', 'download'), default='both')
+    parser.add_argument('--client-kind', choices=('native', 'sdk'), default='native',
+                        help='Benchmark the Linux command-line client or the portable SDK sample')
+    parser.add_argument('--sdk-sample', type=Path,
+                        help='Portable SDK sample executable; defaults to bin-dir/cldt_sdk_sample')
     parser.add_argument('--port', type=int, default=19390)
     parser.add_argument('--host', default='127.0.0.1', help='Local server address; use the Linux interface IP to compare WSL loopback routing')
     parser.add_argument('--work-dir', type=Path, help='Parent for temporary data, e.g. /dev/shm to exclude disk latency')
+    parser.add_argument('--server-disk-workers', type=int,
+                        help='Set MUDUO_DISK_IO_WORKERS for the server process only (1..16)')
+    parser.add_argument('--client-disk-workers', type=int,
+                        help='Set MUDUO_DISK_IO_WORKERS for each client process only (1..16)')
+    parser.add_argument('--server-io-threads', type=int, default=2,
+                        help='Set the server reactor thread count (1..16)')
     args = parser.parse_args()
     if args.size_mib < 1 or args.clients < 1:
         parser.error('size-mib and clients must be positive')
+    if args.server_disk_workers is not None and not 1 <= args.server_disk_workers <= 16:
+        parser.error('server-disk-workers must be between 1 and 16')
+    if args.client_disk_workers is not None and not 1 <= args.client_disk_workers <= 16:
+        parser.error('client-disk-workers must be between 1 and 16')
+    if not 1 <= args.server_io_threads <= 16:
+        parser.error('server-io-threads must be between 1 and 16')
     binaries = args.bin_dir.resolve()
+    sdk_sample = (args.sdk_sample or (binaries / 'cldt_sdk_sample')).resolve()
+    if args.client_kind == 'sdk' and not sdk_sample.is_file():
+        parser.error('SDK sample executable not found: ' + str(sdk_sample))
     with tempfile.TemporaryDirectory(prefix='muduo-bench-', dir=args.work_dir) as tmp:
         work = Path(tmp)
         source = work / 'source.bin'
@@ -54,9 +75,19 @@ def main():
                 stream.write(block)
         expected = digest(source)
         with (work / 'server.log').open('wb') as log:
+            server_env = os.environ.copy()
+            client_env = os.environ.copy()
+            if args.server_disk_workers is not None:
+                server_env['MUDUO_DISK_IO_WORKERS'] = str(args.server_disk_workers)
+            else:
+                server_env.pop('MUDUO_DISK_IO_WORKERS', None)
+            if args.client_disk_workers is not None:
+                client_env['MUDUO_DISK_IO_WORKERS'] = str(args.client_disk_workers)
+            else:
+                client_env.pop('MUDUO_DISK_IO_WORKERS', None)
             server = subprocess.Popen([str(binaries / 'cloud_disk_server'), str(args.port),
-                                       str(work / 'root'), '2', 'bench-token'],
-                                      stdout=log, stderr=subprocess.STDOUT)
+                                       str(work / 'root'), str(args.server_io_threads), 'bench-token'],
+                                      stdout=log, stderr=subprocess.STDOUT, env=server_env)
             try:
                 deadline = time.monotonic() + 10
                 while True:
@@ -71,16 +102,32 @@ def main():
                         time.sleep(.05)
 
                 def run(mode, index):
-                    remote = 'bench/%d.bin' % index
+                    remote = 'bench/%d.bin' % index if mode == 'upload' else 'bench/0.bin'
                     output = work / ('out-%d.bin' % index)
-                    paths = [str(source), remote, '0', 'bench-token'] if mode == 'upload' else [
-                        remote, str(output), '0', '0', 'bench-token']
-                    subprocess.run([str(binaries / 'cloud_disk_client'), mode,
-                                    args.host, str(args.port)] + paths,
+                    if args.client_kind == 'sdk':
+                        command = [str(sdk_sample), args.host, str(args.port),
+                                   'bench-token', mode]
+                        command += ([str(source), remote, '0'] if mode == 'upload' else
+                                    [remote, str(output), '0', '0'])
+                    else:
+                        paths = ([str(source), remote, '0', 'bench-token'] if mode == 'upload'
+                                 else [remote, str(output), '0', '0', 'bench-token'])
+                        command = [str(binaries / 'cloud_disk_client'), mode,
+                                   args.host, str(args.port)] + paths
+                    subprocess.run(command,
                                    check=True, timeout=120, stdout=subprocess.DEVNULL,
+                                   env=client_env,
                                    stderr=subprocess.PIPE)
 
-                for mode in ('upload', 'download'):
+                if args.mode == 'download':
+                    # Identical local seed for isolated download comparisons:
+                    # do not let the preceding upload implementation affect it.
+                    seed = work / 'root/bench/0.bin'
+                    seed.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, seed)
+                    source.unlink()
+                modes = ('upload', 'download') if args.mode == 'both' else (args.mode,)
+                for mode in modes:
                     cpu_begin = child_cpu() + server_cpu(server.pid)
                     start = time.perf_counter()
                     with concurrent.futures.ThreadPoolExecutor(max_workers=args.clients) as pool:
@@ -91,7 +138,15 @@ def main():
                         path = work / ('root/bench/%d.bin' % i) if mode == 'upload' else work / ('out-%d.bin' % i)
                         if digest(path) != expected:
                             raise RuntimeError('SHA256 mismatch: ' + str(path))
-                    print(json.dumps(dict(mode=mode, clients=args.clients,
+                    if mode == 'upload':
+                        # Keep one server-side copy for the download phase.
+                        # This allows large tests to fit in tmpfs without
+                        # retaining source + N uploads + N downloads together.
+                        source.unlink()
+                        for i in range(1, args.clients):
+                            (work / ('root/bench/%d.bin' % i)).unlink()
+                    print(json.dumps(dict(mode=mode, client_kind=args.client_kind,
+                                          clients=args.clients,
                                           host=args.host,
                                           size_mib=args.size_mib, seconds=round(elapsed, 4),
                                           mib_per_second=round(args.clients * args.size_mib / elapsed, 2),

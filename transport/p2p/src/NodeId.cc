@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <random>
@@ -22,9 +23,28 @@ NodeId randomNodeId()
     int fd = ::open("/dev/urandom", O_RDONLY);
     if (fd >= 0)
     {
-        ::read(fd, id.bytes, kIdBytes);
+        size_t offset = 0;
+        while (offset < kIdBytes)
+        {
+            const ssize_t n = ::read(fd, id.bytes + offset, kIdBytes - offset);
+            if (n > 0)
+            {
+                offset += static_cast<size_t>(n);
+            }
+            else if (n < 0 && errno == EINTR)
+            {
+                continue;
+            }
+            else
+            {
+                break;
+            }
+        }
         ::close(fd);
-        return id;
+        if (offset == kIdBytes)
+        {
+            return id;
+        }
     }
     std::mt19937_64 rng(
         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));

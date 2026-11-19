@@ -1,18 +1,12 @@
 #include "Protocol.h"
 
-#include <limits.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-#include <vector>
 #include <array>
+#include <vector>
 
 namespace transport
 {
 namespace protocol
 {
-
 namespace
 {
 
@@ -49,7 +43,6 @@ uint32_t crcUpdateRaw(uint32_t crc, const void *data, size_t len)
 
 uint32_t crc32Append(uint32_t crc, const void *data, size_t len)
 {
-    // crc 为已 finalize 的值；还原中间态再继续更新。
     uint32_t state = crc ^ 0xFFFFFFFFu;
     state = crcUpdateRaw(state, data, len);
     return state ^ 0xFFFFFFFFu;
@@ -57,9 +50,7 @@ uint32_t crc32Append(uint32_t crc, const void *data, size_t len)
 
 uint32_t crc32(const void *data, size_t len)
 {
-    uint32_t state = 0xFFFFFFFFu;
-    state = crcUpdateRaw(state, data, len);
-    return state ^ 0xFFFFFFFFu;
+    return crcUpdateRaw(0xFFFFFFFFu, data, len) ^ 0xFFFFFFFFu;
 }
 
 std::string encodeExtra(const std::string &token, const std::string &path)
@@ -78,6 +69,10 @@ std::string encodeExtra(const std::string &token, const std::string &path)
 
 bool decodeExtra(const std::string &extra, std::string *token, std::string *path)
 {
+    if (!token || !path)
+    {
+        return false;
+    }
     const auto pos = extra.find('\0');
     if (pos == std::string::npos)
     {
@@ -96,30 +91,26 @@ bool decodeExtra(const std::string &extra, std::string *token, std::string *path
 
 bool normalizeRelPath(const std::string &input, std::string *normalized)
 {
-    if (input.empty() || input.size() > kMaxPathLen)
-    {
-        return false;
-    }
-    if (input[0] == '/' || input.find('\\') != std::string::npos ||
-        input.find('\0') != std::string::npos)
+    if (!normalized || input.empty() || input.size() > kMaxPathLen || input[0] == '/' ||
+        input.find('\\') != std::string::npos || input.find('\0') != std::string::npos)
     {
         return false;
     }
 
     std::vector<std::string> parts;
-    std::string cur;
-    auto flush = [&]() {
-        if (cur.empty() || cur == ".")
+    std::string current;
+    const auto flush = [&]() -> bool {
+        if (current.empty() || current == ".")
         {
-            cur.clear();
+            current.clear();
             return true;
         }
-        if (cur == "..")
+        if (current == "..")
         {
             return false;
         }
-        parts.push_back(cur);
-        cur.clear();
+        parts.push_back(current);
+        current.clear();
         return true;
     };
 
@@ -134,14 +125,10 @@ bool normalizeRelPath(const std::string &input, std::string *normalized)
         }
         else
         {
-            cur.push_back(ch);
+            current.push_back(ch);
         }
     }
-    if (!flush())
-    {
-        return false;
-    }
-    if (parts.empty())
+    if (!flush() || parts.empty())
     {
         return false;
     }
@@ -155,69 +142,6 @@ bool normalizeRelPath(const std::string &input, std::string *normalized)
         }
         normalized->append(parts[i]);
     }
-    return true;
-}
-
-bool resolveUnderRoot(const std::string &rootDir,
-                      const std::string &relPath,
-                      std::string *absOut)
-{
-    std::string normalized;
-    if (!normalizeRelPath(relPath, &normalized))
-    {
-        return false;
-    }
-
-    std::string root = rootDir.empty() ? "." : rootDir;
-    char rootReal[PATH_MAX];
-    if (::realpath(root.c_str(), rootReal) == nullptr)
-    {
-        std::string joined = root;
-        if (joined.back() != '/')
-        {
-            joined.push_back('/');
-        }
-        joined.append(normalized);
-        *absOut = joined;
-        return true;
-    }
-
-    std::string joined = rootReal;
-    if (joined.back() != '/')
-    {
-        joined.push_back('/');
-    }
-    joined.append(normalized);
-
-    std::string probe = joined;
-    while (!probe.empty())
-    {
-        char realBuf[PATH_MAX];
-        if (::realpath(probe.c_str(), realBuf) != nullptr)
-        {
-            const std::string real(realBuf);
-            const std::string rootPrefix(rootReal);
-            if (real.size() < rootPrefix.size() ||
-                real.compare(0, rootPrefix.size(), rootPrefix) != 0)
-            {
-                return false;
-            }
-            if (real.size() > rootPrefix.size() && rootPrefix.back() != '/' &&
-                real[rootPrefix.size()] != '/')
-            {
-                return false;
-            }
-            break;
-        }
-        const auto slash = probe.find_last_of('/');
-        if (slash == std::string::npos || slash == 0)
-        {
-            break;
-        }
-        probe.resize(slash);
-    }
-
-    *absOut = joined;
     return true;
 }
 

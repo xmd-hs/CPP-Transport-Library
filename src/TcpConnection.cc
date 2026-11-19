@@ -21,7 +21,14 @@
 struct TcpConnection::FileOwner
 {
     int fd = -1;
-    ~FileOwner() { if (fd >= 0) ::close(fd); }
+    bool closeOnDestroy = true;
+    ~FileOwner()
+    {
+        if (closeOnDestroy && fd >= 0)
+        {
+            ::close(fd);
+        }
+    }
 };
 
 static EventLoop *CheckLoopNotNull(EventLoop *loop)
@@ -103,9 +110,46 @@ void TcpConnection::send(const void *data, size_t len)
     loop_->runInLoop(std::bind(&TcpConnection::sendOwnedInLoop, shared_from_this(), message));
 }
 
+void TcpConnection::send(Buffer &&buf)
+{
+    if (state_ != kConnected || buf.readableBytes() == 0)
+    {
+        return;
+    }
+
+    if (loop_->isInLoopThread())
+    {
+        sendBufferInLoop(std::move(buf));
+        return;
+    }
+
+    auto held = std::make_shared<Buffer>(std::move(buf));
+    loop_->runInLoop([self = shared_from_this(), held]() {
+        self->sendBufferInLoop(std::move(*held));
+    });
+}
+
 void TcpConnection::sendOwnedInLoop(const std::shared_ptr<PoolString> &message)
 {
     sendInLoop(message->data(), message->size());
+}
+
+void TcpConnection::pauseReading()
+{
+    if (reading_)
+    {
+        reading_ = false;
+        channel_->disableReading();
+    }
+}
+
+void TcpConnection::resumeReading()
+{
+    if (!reading_ && state_ == kConnected)
+    {
+        reading_ = true;
+        channel_->enableReading();
+    }
 }
 
 /**
@@ -126,27 +170,42 @@ void TcpConnection::sendInLoop(const void *data, size_t len)
     // 表示channel_第一次开始写数据或者缓冲区没有待发送数据
     if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0)
     {
-        nwrote = ::send(channel_->fd(), data, len, MSG_NOSIGNAL);
-        if (nwrote >= 0)
+        while (remaining > 0)
         {
-            remaining = len - nwrote;
-            if (remaining == 0)
+            nwrote = ::send(channel_->fd(),
+                            static_cast<const char *>(data) + (len - remaining),
+                            remaining,
+                            MSG_NOSIGNAL);
+            if (nwrote > 0)
             {
-                // 合并 writeComplete，避免推流时每次 send 都塞进 pending 队列。
-                scheduleWriteComplete();
+                remaining -= static_cast<size_t>(nwrote);
+                continue;
             }
+            if (nwrote == 0)
+            {
+                break;
+            }
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            if (errno == EWOULDBLOCK || errno == EAGAIN)
+            {
+                nwrote = static_cast<ssize_t>(len - remaining);
+                break;
+            }
+            LOG_ERROR("TcpConnection::sendInLoop");
+            if (errno == EPIPE || errno == ECONNRESET)
+            {
+                faultError = true;
+            }
+            nwrote = static_cast<ssize_t>(len - remaining);
+            break;
         }
-        else // nwrote < 0
+        if (remaining == 0)
         {
-            nwrote = 0;
-            if (errno != EWOULDBLOCK && errno != EAGAIN)
-            {
-                LOG_ERROR("TcpConnection::sendInLoop");
-                if (errno == EPIPE || errno == ECONNRESET) // SIGPIPE RESET
-                {
-                    faultError = true;
-                }
-            }
+            // 合并 writeComplete，避免推流时每次 send 都塞进 pending 队列。
+            scheduleWriteComplete();
         }
     }
     /**
@@ -165,10 +224,71 @@ void TcpConnection::sendInLoop(const void *data, size_t len)
             loop_->queueInLoop(
                 std::bind(highWaterMarkCallback_, shared_from_this(), oldLen + remaining));
         }
-        outputBuffer_.append(static_cast<const char *>(data) + nwrote, remaining);
+        outputBuffer_.append(static_cast<const char *>(data) + (len - remaining), remaining);
         if (!channel_->isWriting())
         {
             channel_->enableWriting(); // 这里一定要注册channel的写事件 否则poller不会给channel通知epollout
+        }
+    }
+}
+
+void TcpConnection::sendBufferInLoop(Buffer &&buf)
+{
+    if (state_ == kDisconnected)
+    {
+        LOG_ERROR("disconnected, give up writing");
+        return;
+    }
+
+    if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0)
+    {
+        while (buf.readableBytes() > 0)
+        {
+            const ssize_t n = ::send(channel_->fd(), buf.peek(), buf.readableBytes(), MSG_NOSIGNAL);
+            if (n > 0)
+            {
+                buf.retrieve(static_cast<size_t>(n));
+                continue;
+            }
+            if (n == 0)
+            {
+                break;
+            }
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            if (errno == EWOULDBLOCK || errno == EAGAIN)
+            {
+                break;
+            }
+            LOG_ERROR("TcpConnection::sendBufferInLoop");
+            if (errno == EPIPE || errno == ECONNRESET)
+            {
+                return;
+            }
+            break;
+        }
+        if (buf.readableBytes() == 0)
+        {
+            scheduleWriteComplete();
+            return;
+        }
+    }
+
+    if (buf.readableBytes() > 0)
+    {
+        const size_t remaining = buf.readableBytes();
+        const size_t oldLen = outputBuffer_.readableBytes();
+        if (oldLen + remaining >= highWaterMark_ && oldLen < highWaterMark_ && highWaterMarkCallback_)
+        {
+            loop_->queueInLoop(
+                std::bind(highWaterMarkCallback_, shared_from_this(), oldLen + remaining));
+        }
+        outputBuffer_.append(buf.peek(), remaining);
+        if (!channel_->isWriting())
+        {
+            channel_->enableWriting();
         }
     }
 }
@@ -372,12 +492,19 @@ void TcpConnection::handleError()
 }
 
 // 新增的零拷贝发送函数
-void TcpConnection::sendFile(int fileDescriptor, off_t offset, size_t count) {
-    if (connected()) {
-        // Keep a duplicate alive across threads and EPOLLOUT waits, even if the
-        // caller closes its descriptor after an early protocol error.
-        // Allocate before dup: allocation failure cannot leak a descriptor.
-        auto owner = makePoolShared<FileOwner>();
+void TcpConnection::sendFile(int fileDescriptor, off_t offset, size_t count, bool duplicate)
+{
+    if (!connected())
+    {
+        LOG_ERROR("TcpConnection::sendFile - not connected");
+        return;
+    }
+
+    // Keep ownership across threads and EPOLLOUT waits.
+    // Allocate before dup: allocation failure cannot leak a descriptor.
+    auto owner = makePoolShared<FileOwner>();
+    if (duplicate)
+    {
         const int owned = ::fcntl(fileDescriptor, F_DUPFD_CLOEXEC, 0);
         if (owned < 0)
         {
@@ -386,19 +513,24 @@ void TcpConnection::sendFile(int fileDescriptor, off_t offset, size_t count) {
             return;
         }
         owner->fd = owned;
-        loop_->runInLoop([self = shared_from_this(), owner, offset, count] {
-            if (self->sendFileRemaining_ != 0)
-            {
-                LOG_ERROR("TcpConnection::sendFile overlapping file sends\n");
-                self->forceClose();
-                return;
-            }
-            self->sendFileOwner_ = owner;
-            self->sendFileInLoop(owner->fd, offset, count);
-        });
-    } else {
-        LOG_ERROR("TcpConnection::sendFile - not connected");
+        owner->closeOnDestroy = true;
     }
+    else
+    {
+        owner->fd = fileDescriptor;
+        owner->closeOnDestroy = false; // caller keeps the real fd alive
+    }
+
+    loop_->runInLoop([self = shared_from_this(), owner, offset, count] {
+        if (self->sendFileRemaining_ != 0)
+        {
+            LOG_ERROR("TcpConnection::sendFile overlapping file sends\n");
+            self->forceClose();
+            return;
+        }
+        self->sendFileOwner_ = owner;
+        self->sendFileInLoop(owner->fd, offset, count);
+    });
 }
 
 // 在事件循环中执行 sendfile。内核缓冲满了就等 EPOLLOUT，不再把自身塞回待执行队列空转。
@@ -444,24 +576,24 @@ void TcpConnection::sendFileInLoop(int fileDescriptor, off_t offset, size_t coun
         return;
     }
 
-    ssize_t bytesSent;
-    do
+    // Keep each syscall at most 1 MiB (4 MiB batches were withdrawn), but keep
+    // writing until EAGAIN so a single EPOLLOUT can fill the socket buffer.
+    while (count > 0)
     {
-        bytesSent = ::sendfile(socket_->fd(), fileDescriptor, &offset,
-                               std::min(count, size_t(1024 * 1024)));
-    } while (bytesSent < 0 && errno == EINTR);
-    if (bytesSent > 0)
-    {
-        lastFileWriteTime_ = std::chrono::steady_clock::now();
-        if (static_cast<size_t>(bytesSent) >= count)
+        ssize_t bytesSent;
+        do
         {
-            count = 0;
-        }
-        else
+            bytesSent = ::sendfile(socket_->fd(), fileDescriptor, &offset,
+                                   std::min(count, size_t(1024 * 1024)));
+        } while (bytesSent < 0 && errno == EINTR);
+
+        if (bytesSent > 0)
         {
+            lastFileWriteTime_ = std::chrono::steady_clock::now();
             count -= static_cast<size_t>(bytesSent);
+            continue;
         }
-        if (count == 0)
+        if (bytesSent == 0)
         {
             sendFileRemaining_ = 0;
             sendFileOwner_.reset();
@@ -469,28 +601,14 @@ void TcpConnection::sendFileInLoop(int fileDescriptor, off_t offset, size_t coun
             {
                 channel_->disableWriting();
             }
-            scheduleWriteComplete();
-            if (state_ == kDisconnecting)
-            {
-                shutdownInLoop();
-            }
+            LOG_ERROR("TcpConnection::sendFileInLoop unexpected EOF\n");
+            forceClose();
             return;
         }
-    }
-    else if (bytesSent == 0)
-    {
-        sendFileRemaining_ = 0;
-        sendFileOwner_.reset();
-        if (channel_->isWriting())
+        if (errno == EWOULDBLOCK || errno == EAGAIN)
         {
-            channel_->disableWriting();
+            break;
         }
-        LOG_ERROR("TcpConnection::sendFileInLoop unexpected EOF\n");
-        forceClose();
-        return;
-    }
-    else if (errno != EWOULDBLOCK && errno != EAGAIN)
-    {
         LOG_ERROR("TcpConnection::sendFileInLoop");
         sendFileRemaining_ = 0;
         sendFileOwner_.reset();
@@ -499,6 +617,22 @@ void TcpConnection::sendFileInLoop(int fileDescriptor, off_t offset, size_t coun
             channel_->disableWriting();
         }
         forceClose();
+        return;
+    }
+
+    if (count == 0)
+    {
+        sendFileRemaining_ = 0;
+        sendFileOwner_.reset();
+        if (channel_->isWriting())
+        {
+            channel_->disableWriting();
+        }
+        scheduleWriteComplete();
+        if (state_ == kDisconnecting)
+        {
+            shutdownInLoop();
+        }
         return;
     }
 

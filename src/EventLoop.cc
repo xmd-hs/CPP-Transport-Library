@@ -3,8 +3,11 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <algorithm>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
+#include <new>
 #include <utility>
 
 #include "EventLoop.h"
@@ -52,6 +55,177 @@ int createEventfd()
     return evtfd;
 }
 
+struct EventLoop::AsyncOperation::State
+{
+    explicit State(int fd)
+        : wakeupFd(fd), shuttingDown(false)
+    {
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    int wakeupFd;
+    bool shuttingDown;
+    bool wakeupPending = false;
+    size_t activeOperations = 0;
+    std::vector<EventLoop::Functor> pending;
+
+    bool begin()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (shuttingDown)
+        {
+            return false;
+        }
+        // One lease posts at most one completion. Reserve its slot before
+        // accepting the operation so shutdown never needs worker-side growth.
+        if (activeOperations >= pending.max_size() - pending.size())
+        {
+            return false;
+        }
+        const size_t required = pending.size() + activeOperations + 1;
+        if (pending.capacity() < required)
+        {
+            const size_t maxCapacity = pending.max_size();
+            const size_t doubled = pending.capacity() > maxCapacity / 2
+                ? maxCapacity
+                : pending.capacity() * 2;
+            try
+            {
+                pending.reserve(std::max(required, doubled));
+            }
+            catch (const std::bad_alloc &)
+            {
+                return false;
+            }
+        }
+        ++activeOperations;
+        return true;
+    }
+
+    void end()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (activeOperations > 0)
+        {
+            --activeOperations;
+        }
+        if (activeOperations == 0)
+        {
+            cv.notify_all();
+        }
+    }
+
+    bool post(EventLoop::Functor cb)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (shuttingDown)
+        {
+            // Keep destruction of captured objects on the EventLoop thread.
+            // shutdown() waits for this lease before draining this callback.
+            try
+            {
+                pending.emplace_back(std::move(cb));
+            }
+            catch (const std::bad_alloc &)
+            {
+            }
+            return false;
+        }
+        try
+        {
+            pending.emplace_back(std::move(cb));
+        }
+        catch (const std::bad_alloc &)
+        {
+            return false;
+        }
+        if (wakeupPending)
+        {
+            return true;
+        }
+        wakeupPending = true;
+        const uint64_t one = 1;
+        ssize_t n;
+        do
+        {
+            n = ::write(wakeupFd, &one, sizeof(one));
+        } while (n < 0 && errno == EINTR);
+        if (n < 0 && errno != EAGAIN)
+        {
+            wakeupPending = false;
+            return false;
+        }
+        // EAGAIN means the eventfd is already readable; the callback is
+        // still safely queued for doPendingFunctors().
+        return true;
+    }
+
+    void takePending(std::vector<EventLoop::Functor> &result)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        result.swap(pending);
+        wakeupPending = false;
+    }
+
+    std::vector<EventLoop::Functor> shutdownAndWait()
+    {
+        std::vector<EventLoop::Functor> result;
+        std::unique_lock<std::mutex> lock(mutex);
+        shuttingDown = true;
+        cv.wait(lock, [this] { return activeOperations == 0; });
+        result.swap(pending);
+        return result;
+    }
+};
+
+EventLoop::AsyncOperation::~AsyncOperation()
+{
+    reset();
+}
+
+EventLoop::AsyncOperation::AsyncOperation(AsyncOperation &&other) noexcept
+    : state_(std::move(other.state_))
+    , posted_(other.posted_.exchange(true, std::memory_order_acq_rel))
+{
+}
+
+EventLoop::AsyncOperation &EventLoop::AsyncOperation::operator=(AsyncOperation &&other) noexcept
+{
+    if (this != &other)
+    {
+        reset();
+        state_ = std::move(other.state_);
+        posted_.store(other.posted_.exchange(true, std::memory_order_acq_rel),
+                      std::memory_order_release);
+    }
+    return *this;
+}
+
+void EventLoop::AsyncOperation::reset()
+{
+    std::shared_ptr<State> state = std::move(state_);
+    if (state)
+    {
+        state->end();
+    }
+    posted_.store(false, std::memory_order_release);
+}
+
+bool EventLoop::AsyncOperation::post(Functor cb) const
+{
+    if (!state_)
+    {
+        return false;
+    }
+    bool expected = false;
+    if (!posted_.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    {
+        return false;
+    }
+    return state_->post(std::move(cb));
+}
+
 EventLoop::EventLoop()
     : looping_(false)
     , quit_(false)
@@ -60,6 +234,7 @@ EventLoop::EventLoop()
     , poller_(Poller::newDefaultPoller(this))
     , wakeupFd_(createEventfd())
     , wakeupPending_(false)
+    , asyncState_(std::make_shared<AsyncOperation::State>(wakeupFd_))
     , wakeupChannel_(makePoolUnique<Channel>(this, wakeupFd_))
     , timerQueue_(makePoolUnique<TimerQueue>(this))
 {
@@ -79,6 +254,11 @@ EventLoop::EventLoop()
 }
 EventLoop::~EventLoop()
 {
+    // Stop new operations, wait for accepted workers, and drain late
+    // completions before closing the eventfd. AsyncOperation owns this shared
+    // state, never a raw EventLoop*.
+    auto abandonedAsyncFunctors = asyncState_->shutdownAndWait();
+    abandonedAsyncFunctors.clear();
     wakeupChannel_->disableAll(); // 给Channel移除所有感兴趣的事件
     wakeupChannel_->remove();     // 把Channel从EventLoop上删除掉
     ::close(wakeupFd_);
@@ -186,6 +366,16 @@ void EventLoop::queueInLoop(Functor cb)
     }
 }
 
+EventLoop::AsyncOperation EventLoop::beginAsyncOperation()
+{
+    std::shared_ptr<AsyncOperation::State> state = asyncState_;
+    if (!state->begin())
+    {
+        return AsyncOperation();
+    }
+    return AsyncOperation(std::move(state));
+}
+
 void EventLoop::handleRead()
 {
     uint64_t one = 1;
@@ -250,6 +440,14 @@ void EventLoop::doPendingFunctors()
     {
         functor(); // 执行当前loop需要执行的回调操作
     }
+
+    asyncRunningFunctors_.clear();
+    asyncState_->takePending(asyncRunningFunctors_);
+    for (const Functor &functor : asyncRunningFunctors_)
+    {
+        functor();
+    }
+    asyncRunningFunctors_.clear();
 
     runningFunctors_.clear();
     callingPendingFunctors_ = false;

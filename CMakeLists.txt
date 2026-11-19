@@ -26,4 +26,5 @@ set(LIBS
 #添加子目录
 add_subdirectory(src)
 add_subdirectory(transport)
+add_subdirectory(transport/sdk)
 add_subdirectory(example)

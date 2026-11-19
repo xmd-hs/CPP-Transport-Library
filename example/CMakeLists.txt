@@ -26,6 +26,7 @@ set(TRANSPORT_EXAMPLE_TARGETS
     cloud_disk_server
     cloud_disk_client
     test_codec
+    test_disk_io
     test_idle
     p2p_seed
     p2p_leech
@@ -46,10 +47,11 @@ endforeach()
 
 if(BUILD_TESTING)
     add_test(NAME codec COMMAND test_codec)
+    add_test(NAME disk_io COMMAND test_disk_io)
     add_test(NAME idle_timeout COMMAND test_idle)
     add_test(NAME sendfile COMMAND test_sendfile)
     add_test(NAME receive COMMAND test_receive)
     add_test(NAME buffer COMMAND test_buffer)
     add_test(NAME pool COMMAND test_pool)
-    set_tests_properties(codec idle_timeout sendfile receive buffer pool PROPERTIES TIMEOUT 10)
+    set_tests_properties(codec disk_io idle_timeout sendfile receive buffer pool PROPERTIES TIMEOUT 10)
 endif()
