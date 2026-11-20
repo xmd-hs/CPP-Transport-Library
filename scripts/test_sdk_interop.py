@@ -2,6 +2,7 @@
 """Exercise the standalone C SDK against the Linux CLDT server."""
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -37,7 +38,8 @@ def main():
         with (work / 'server.log').open('wb') as log:
             server = subprocess.Popen(
                 [str(args.server.resolve()), str(args.port), str(root), '1', 'sdk-token'],
-                stdout=log, stderr=subprocess.STDOUT)
+                stdout=log, stderr=subprocess.STDOUT,
+                env=dict(os.environ, CLDT_BIND_IP=args.host))
             try:
                 deadline = time.monotonic() + 10
                 while True:
@@ -104,7 +106,7 @@ def main():
                 with broken_source.open('wb') as stream:
                     stream.truncate(32 * 1024 * 1024)
                 with socket.socket() as listener:
-                    listener.bind(('127.0.0.1', 0))
+                    listener.bind((args.host, 0))
                     listener.listen(1)
                     listener.settimeout(10)
 
@@ -121,7 +123,7 @@ def main():
                     peer.start()
                     try:
                         disconnected = subprocess.run(
-                            [sample, '127.0.0.1', str(listener.getsockname()[1]),
+                            [sample, args.host, str(listener.getsockname()[1]),
                              'sdk-token', 'upload', str(broken_source), 'broken.bin'],
                             timeout=20, capture_output=True)
                         if disconnected.returncode != 2:

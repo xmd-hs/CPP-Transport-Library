@@ -76,6 +76,7 @@ def main():
         expected = digest(source)
         with (work / 'server.log').open('wb') as log:
             server_env = os.environ.copy()
+            server_env['CLDT_BIND_IP'] = args.host
             client_env = os.environ.copy()
             if args.server_disk_workers is not None:
                 server_env['MUDUO_DISK_IO_WORKERS'] = str(args.server_disk_workers)

@@ -10,6 +10,8 @@
 #else
 #define CLDT_SDK_API __declspec(dllimport)
 #endif
+#elif defined(CLDT_SDK_SHARED) && (defined(__GNUC__) || defined(__clang__))
+#define CLDT_SDK_API __attribute__((visibility("default")))
 #else
 #define CLDT_SDK_API
 #endif
@@ -39,6 +41,9 @@ enum cldt_status
     CLDT_STATUS_FILE_ERROR = 1007,
     CLDT_STATUS_REMOTE_ERROR = 1008,
     CLDT_STATUS_INTERNAL_ERROR = 1009,
+    CLDT_STATUS_TIMEOUT = 1010,
+    CLDT_STATUS_TLS_ERROR = 1011,
+    CLDT_STATUS_NOT_SUPPORTED = 1012,
     CLDT_STATUS_REMOTE_ERROR_BASE = 2000
 };
 
@@ -70,6 +75,36 @@ typedef struct cldt_file_io
     cldt_file_close_fn close;
 } cldt_file_io;
 
+enum cldt_durability
+{
+    CLDT_DURABILITY_BUFFERED = 0,
+    CLDT_DURABILITY_SYNC = 1
+};
+
+// Initialize with cldt_client_options_init; set options only while idle.
+// TLS never falls back to plaintext. CA verification and hostname/IP checks
+// are mandatory. ca_file=NULL uses OpenSSL's default trust paths (not the
+// Windows/Android OS certificate store); mobile apps should supply a CA bundle.
+typedef struct cldt_client_options
+{
+    size_t struct_size;
+    uint32_t connect_timeout_ms; // Includes DNS, connect, and TLS handshake.
+    uint32_t io_timeout_ms;      // Maximum wait for network progress.
+    int tls_enabled;
+    const char *ca_file;
+    const char *server_name;     // NULL verifies host passed to create().
+    int download_durability;
+} cldt_client_options;
+
+typedef int (*cldt_file_sync_fn)(void *handle);
+CLDT_SDK_API void cldt_client_options_init(cldt_client_options *options);
+CLDT_SDK_API int cldt_client_set_options(cldt_client *client,
+                                         const cldt_client_options *options);
+// Required for custom I/O when SYNC downloads are requested. Return 0 only
+// after durable synchronization; failures are reported to the done callback.
+// Set AFTER set_file_io; replacing the I/O provider clears the sync callback.
+CLDT_SDK_API int cldt_client_set_file_sync(cldt_client *client, cldt_file_sync_fn sync);
+
 typedef void (*cldt_progress_fn)(void *user_data,
                                  uint64_t transferred,
                                  uint64_t total,
@@ -81,6 +116,10 @@ typedef void (*cldt_done_fn)(void *user_data,
 
 // Creates a serial asynchronous client. Callbacks run on its worker thread;
 // applications should dispatch UI updates to their own main/UI thread.
+// Compatibility default is plaintext; enable TLS with set_options BEFORE work.
+// Default downloads synchronize the destination file before reporting success.
+// Callbacks must not throw or block indefinitely. Destroy must be externally
+// serialized against all API calls on this handle (use-after-free is invalid).
 CLDT_SDK_API cldt_client *cldt_client_create(const char *host,
                                              uint16_t port,
                                              const char *token,
@@ -110,7 +149,8 @@ CLDT_SDK_API int cldt_client_stat(cldt_client *client,
                                   const char *remote_relative_path);
 
 // Cancels an active request by interrupting its socket. Completion reports
-// CLDT_STATUS_CANCELLED or the underlying I/O error.
+// CLDT_STATUS_CANCELLED. Network waits are interruptible, but application file
+// callbacks and native file synchronization must return before destroy finishes.
 CLDT_SDK_API int cldt_client_cancel(cldt_client *client);
 
 // Stops the worker and waits for callbacks/operations to finish. Do not call

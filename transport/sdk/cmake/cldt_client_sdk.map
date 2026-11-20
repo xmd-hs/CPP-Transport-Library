@@ -1,0 +1,15 @@
+{
+    global:
+        cldt_client_create;
+        cldt_client_options_init;
+        cldt_client_set_options;
+        cldt_client_set_file_sync;
+        cldt_client_set_file_io;
+        cldt_client_upload;
+        cldt_client_download;
+        cldt_client_stat;
+        cldt_client_cancel;
+        cldt_client_destroy;
+    local:
+        *;
+};

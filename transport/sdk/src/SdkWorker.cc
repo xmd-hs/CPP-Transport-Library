@@ -1,4 +1,5 @@
 #include "SdkInternal.h"
+#include "SdkSignalGuard.h"
 
 namespace cldt_sdk
 {
@@ -39,54 +40,32 @@ Result processRequest(cldt_client *client, const Request &request)
         result.message = "cancelled";
         return result;
     }
-    NativeSocket socket = connectSocket(client->host, client->port);
-    if (socket == kInvalidSocket)
+    Stream socket(client);
+    if (!connectStream(socket))
     {
-        result.status = CLDT_STATUS_CONNECT_FAILED;
-        result.message = "connection failed";
+        result.status = socket.error;
+        result.message = "DNS/connect/TLS failed";
     }
+    else if (request.operation == Operation::kUpload)
+        result.status = processUpload(client, socket, request, &result.total, &result.message);
+    else if (request.operation == Operation::kDownload)
+        result.status = processDownload(client, socket, request, &result.total, &result.message);
     else
+        result.status = processStat(socket, client, request, &result.total, &result.message);
+    if (socket.error != CLDT_STATUS_OK)
+        result.status = socket.error;
+    if (cancelled(client))
     {
-        {
-            std::lock_guard<std::mutex> lock(client->socketMutex);
-            client->activeSocket = socket;
-            if (cancelled(client))
-            {
-#if defined(_WIN32)
-                ::shutdown(socket, SD_BOTH);
-#else
-                ::shutdown(socket, SHUT_RDWR);
-#endif
-            }
-        }
-        if (cancelled(client))
-        {
-            result.status = CLDT_STATUS_CANCELLED;
-            result.message = "cancelled";
-        }
-        else if (request.operation == Operation::kUpload)
-        {
-            result.status = processUpload(client, socket, request, &result.total, &result.message);
-        }
-        else if (request.operation == Operation::kDownload)
-        {
-            result.status = processDownload(client, socket, request, &result.total, &result.message);
-        }
-        else
-        {
-            result.status = processStat(socket, client, request, &result.total, &result.message);
-        }
-        {
-            std::lock_guard<std::mutex> lock(client->socketMutex);
-            client->activeSocket = kInvalidSocket;
-        }
-        closeSocket(socket);
+        result.status = CLDT_STATUS_CANCELLED;
+        result.message = "cancelled";
     }
     return result;
 }
 
 void workerLoop(cldt_client *client)
 {
+    WorkerSignalGuard signalGuard;
+    (void)signalGuard;
     while (true)
     {
         Request request;
@@ -115,7 +94,9 @@ void workerLoop(cldt_client *client)
             client->busy = false;
             client->cancelRequested.store(false, std::memory_order_release);
         }
-        reportDone(client, result.status, result.total, result.message);
+        // A throwing C++ callback must not terminate the process/worker.
+        try { reportDone(client, result.status, result.total, result.message); }
+        catch (...) {}
     }
 }
 
@@ -125,6 +106,13 @@ int enqueue(cldt_client *client, Request request)
     {
         return CLDT_STATUS_INVALID_ARGUMENT;
     }
+    std::string normalized;
+    if (!transport::protocol::normalizeRelPath(request.remotePath, &normalized) ||
+        (request.operation != Operation::kStat && request.localIdentifier.empty()) ||
+        request.offset > static_cast<uint64_t>(INT64_MAX) ||
+        request.length > static_cast<uint64_t>(INT64_MAX) - request.offset)
+        return CLDT_STATUS_INVALID_ARGUMENT;
+    request.remotePath.swap(normalized);
     std::lock_guard<std::mutex> lock(client->mutex);
     if (client->stopping)
     {
@@ -134,6 +122,9 @@ int enqueue(cldt_client *client, Request request)
     {
         return CLDT_STATUS_BUSY;
     }
+    if (request.operation == Operation::kDownload && client->customFileIo &&
+        client->durability == CLDT_DURABILITY_SYNC && !client->fileSync)
+        return CLDT_STATUS_NOT_SUPPORTED;
     client->busy = true;
     client->cancelRequested.store(false, std::memory_order_release);
     try

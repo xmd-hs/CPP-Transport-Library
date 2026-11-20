@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """File transfer regression: upload/resume/download/range/parallel/empty/auth."""
 import argparse
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -23,7 +24,8 @@ def main():
         source.write_bytes(data)
         with (work / 'server.log').open('wb') as log:
             server = subprocess.Popen([str(binaries / 'cloud_disk_server'), str(args.port),
-                                       str(root), '2', 'test-token'], stdout=log, stderr=subprocess.STDOUT)
+                                       str(root), '2', 'test-token'], stdout=log, stderr=subprocess.STDOUT,
+                                      env=dict(os.environ, CLDT_BIND_IP=args.host))
             try:
                 deadline = time.monotonic() + 10
                 while True:

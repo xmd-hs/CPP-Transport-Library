@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "EventLoop.h"
@@ -34,7 +35,9 @@ int main(int argc, char *argv[])
     }
 
     EventLoop loop;
-    InetAddress addr(port, "0.0.0.0");
+    // A TLS terminator should forward to a loopback-only backend.
+    const char *bindIp = std::getenv("CLDT_BIND_IP");
+    InetAddress addr(port, bindIp && *bindIp ? bindIp : "127.0.0.1");
     FileTransferServer server(&loop, addr, root, "CloudDisk");
     server.setThreadNum(ioThreads);
     server.setIdleTimeoutSec(60.0);

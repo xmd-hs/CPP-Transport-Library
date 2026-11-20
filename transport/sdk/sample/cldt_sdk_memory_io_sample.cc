@@ -187,6 +187,15 @@ int runSample(int argc, char **argv)
         std::cerr << "failed to create SDK client\n";
         return 1;
     }
+    // This example stores bytes in RAM and cannot promise durable storage.
+    cldt_client_options options;
+    cldt_client_options_init(&options);
+    options.download_durability = CLDT_DURABILITY_BUFFERED;
+    if (cldt_client_set_options(client, &options) != CLDT_STATUS_OK)
+    {
+        cldt_client_destroy(client);
+        return 1;
+    }
     cldt_file_io fileIo{};
     fileIo.struct_size = sizeof(fileIo);
     fileIo.context = &files;

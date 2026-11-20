@@ -68,7 +68,7 @@ void encodeHeader(uint8_t raw[transport::protocol::kHeaderSize],
     put32(raw + 36, checksum);
 }
 
-bool sendFrame(NativeSocket socket,
+bool sendFrame(Stream &socket,
                uint8_t type,
                const std::string &extra,
                const std::string &body,
@@ -97,7 +97,7 @@ bool sendFrame(NativeSocket socket,
            (encodedBodyLength == 0 || sendAll(socket, body.data(), encodedBodyLength));
 }
 
-bool receiveFrame(NativeSocket socket, Frame *frame)
+bool receiveFrame(Stream &socket, Frame *frame)
 {
     uint8_t raw[transport::protocol::kHeaderSize];
     if (!receiveExact(socket, raw, sizeof(raw)) ||
@@ -109,6 +109,9 @@ bool receiveFrame(NativeSocket socket, Frame *frame)
     const uint32_t extraLen = get32(raw + 8);
     const uint64_t bodyLen = get64(raw + 12);
     const uint8_t type = raw[5];
+    if ((get16(raw + 6) & ~transport::kFlagFinal) != 0) return false;
+    if (type == static_cast<uint8_t>(transport::MessageType::kError) &&
+        bodyLen > transport::protocol::kMaxErrorLen) return false;
     const size_t encodedBodyLength =
         type == static_cast<uint8_t>(transport::MessageType::kError)
             ? static_cast<size_t>(bodyLen)

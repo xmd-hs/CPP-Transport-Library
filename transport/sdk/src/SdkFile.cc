@@ -19,11 +19,11 @@ namespace cldt_sdk
 {
 namespace { struct NativeFile { int fd = -1; }; }
 
-bool uploadNativeFile(cldt_client *client, NativeSocket socket, void *opaque,
+bool uploadNativeFile(cldt_client *client, Stream &socket, void *opaque,
                       uint64_t offset, uint64_t total, uint64_t *done, int *status)
 {
 #if defined(__linux__) && !defined(CLDT_SDK_DISABLE_SENDFILE)
-    if (client->customFileIo)
+    if (client->customFileIo || client->tlsEnabled)
     {
         return false;
     }
@@ -63,6 +63,7 @@ bool uploadNativeFile(cldt_client *client, NativeSocket socket, void *opaque,
     }
     const int fd = static_cast<NativeFile *>(opaque)->fd;
     auto lastReport = Clock::now() - std::chrono::seconds(1);
+    auto deadline = Clock::now() + std::chrono::milliseconds(client->ioTimeoutMs);
     while (*done < total)
     {
         if (cancelled(client))
@@ -72,10 +73,11 @@ bool uploadNativeFile(cldt_client *client, NativeSocket socket, void *opaque,
         }
         off_t position = static_cast<off_t>(offset + *done);
         const size_t amount = static_cast<size_t>(std::min<uint64_t>(total - *done, 1024 * 1024));
-        const ssize_t sent = ::sendfile(socket, fd, &position, amount);
+        const ssize_t sent = ::sendfile(socket.fd, fd, &position, amount);
         if (sent > 0)
         {
             *done += static_cast<uint64_t>(sent);
+            deadline = Clock::now() + std::chrono::milliseconds(client->ioTimeoutMs);
             const auto now = Clock::now();
             if (now - lastReport >= std::chrono::milliseconds(100) || *done == total)
             {
@@ -86,6 +88,15 @@ bool uploadNativeFile(cldt_client *client, NativeSocket socket, void *opaque,
         }
         if (sent < 0 && errno == EINTR)
         {
+            continue;
+        }
+        if (sent < 0 && wouldBlock(errno))
+        {
+            if (!waitSocket(socket, true, deadline))
+            {
+                *status = socket.error;
+                return true;
+            }
             continue;
         }
         if (sent < 0 && (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP))
@@ -107,7 +118,7 @@ bool uploadNativeFile(cldt_client *client, NativeSocket socket, void *opaque,
 int nativeOpen(const std::string &identifier, uint32_t flags, uint64_t expectedSize,
                void **handle, uint64_t *fileSize)
 {
-    auto *file = new (std::nothrow) NativeFile();
+    std::unique_ptr<NativeFile> file(new (std::nothrow) NativeFile());
     if (!file)
     {
         return -1;
@@ -117,14 +128,12 @@ int nativeOpen(const std::string &identifier, uint32_t flags, uint64_t expectedS
                                                   identifier.c_str(), -1, nullptr, 0);
     if (wideLength <= 0)
     {
-        delete file;
         return -1;
     }
     std::wstring widePath(static_cast<size_t>(wideLength), L'\0');
     if (::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, identifier.c_str(), -1,
                               &widePath[0], wideLength) <= 0)
     {
-        delete file;
         return -1;
     }
     widePath.resize(static_cast<size_t>(wideLength - 1));
@@ -133,20 +142,17 @@ int nativeOpen(const std::string &identifier, uint32_t flags, uint64_t expectedS
     if (::_wsopen_s(&fd, widePath.c_str(), access | _O_BINARY, _SH_DENYNO,
                     _S_IREAD | _S_IWRITE) != 0)
     {
-        delete file;
         return -1;
     }
     if ((flags & CLDT_FILE_TRUNCATE) && ::_chsize_s(fd, expectedSize) != 0)
     {
         ::_close(fd);
-        delete file;
         return -1;
     }
     const __int64 length = ::_filelengthi64(fd);
     if (length < 0)
     {
         ::_close(fd);
-        delete file;
         return -1;
     }
     *fileSize = static_cast<uint64_t>(length);
@@ -157,7 +163,6 @@ int nativeOpen(const std::string &identifier, uint32_t flags, uint64_t expectedS
     const int fd = ::open(identifier.c_str(), openFlags, 0644);
     if (fd < 0)
     {
-        delete file;
         return -1;
     }
     if (flags & CLDT_FILE_TRUNCATE)
@@ -165,7 +170,6 @@ int nativeOpen(const std::string &identifier, uint32_t flags, uint64_t expectedS
         if (::ftruncate(fd, static_cast<off_t>(expectedSize)) != 0)
         {
             ::close(fd);
-            delete file;
             return -1;
         }
         *fileSize = expectedSize;
@@ -176,14 +180,13 @@ int nativeOpen(const std::string &identifier, uint32_t flags, uint64_t expectedS
         if (::fstat(fd, &st) != 0 || st.st_size < 0)
         {
             ::close(fd);
-            delete file;
             return -1;
         }
         *fileSize = static_cast<uint64_t>(st.st_size);
     }
     file->fd = fd;
 #endif
-    *handle = file;
+    *handle = file.release();
     return 0;
 }
 
@@ -198,24 +201,41 @@ int openFile(cldt_client *client, const std::string &identifier, uint32_t flags,
     return nativeOpen(identifier, flags, expectedSize, handle, size);
 }
 
-void closeFile(cldt_client *client, void *handle)
+bool closeFile(cldt_client *client, void *handle)
 {
     if (!handle)
     {
-        return;
+        return true;
     }
     if (client->customFileIo)
     {
         client->fileIo.close(handle);
-        return;
+        return true;
     }
     auto *file = static_cast<NativeFile *>(handle);
 #if defined(_WIN32)
-    ::_close(file->fd);
+    const int result = ::_close(file->fd);
 #else
-    ::close(file->fd);
+    // Do not retry close on EINTR: on Linux the descriptor is already freed.
+    const int result = ::close(file->fd);
 #endif
     delete file;
+    return result == 0;
+}
+
+bool syncFile(cldt_client *client, void *handle)
+{
+    if (client->durability == CLDT_DURABILITY_BUFFERED) return true;
+    if (client->customFileIo)
+        return client->fileSync && client->fileSync(handle) == 0;
+    auto *file = static_cast<NativeFile *>(handle);
+#if defined(_WIN32)
+    return ::_commit(file->fd) == 0;
+#else
+    int result;
+    do { result = ::fsync(file->fd); } while (result < 0 && errno == EINTR);
+    return result == 0;
+#endif
 }
 
 bool readAt(cldt_client *client, void *handle, uint64_t offset, void *buffer,
@@ -234,7 +254,9 @@ bool readAt(cldt_client *client, void *handle, uint64_t offset, void *buffer,
     const unsigned amount = static_cast<unsigned>(std::min<size_t>(capacity, UINT_MAX));
     const int n = ::_read(file->fd, buffer, amount);
 #else
-    const ssize_t n = ::pread(file->fd, buffer, capacity, static_cast<off_t>(offset));
+    ssize_t n;
+    do { n = ::pread(file->fd, buffer, capacity, static_cast<off_t>(offset)); }
+    while (n < 0 && errno == EINTR);
 #endif
     if (n < 0)
     {
@@ -260,7 +282,9 @@ bool writeAt(cldt_client *client, void *handle, uint64_t offset, const void *buf
     const unsigned amount = static_cast<unsigned>(std::min<size_t>(length, UINT_MAX));
     const int n = ::_write(file->fd, buffer, amount);
 #else
-    const ssize_t n = ::pwrite(file->fd, buffer, length, static_cast<off_t>(offset));
+    ssize_t n;
+    do { n = ::pwrite(file->fd, buffer, length, static_cast<off_t>(offset)); }
+    while (n < 0 && errno == EINTR);
 #endif
     if (n < 0)
     {

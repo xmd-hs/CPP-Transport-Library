@@ -1,171 +1,309 @@
-#include "SdkInternal.h"
-
+﻿#include "SdkInternal.h"
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <unistd.h>
 #endif
 
 namespace cldt_sdk
 {
-bool sendAll(NativeSocket socket, const void *buffer, size_t length)
+int socketError()
 {
-    const char *data = static_cast<const char *>(buffer);
-    while (length > 0)
-    {
 #if defined(_WIN32)
-        const int amount = static_cast<int>(std::min<size_t>(length, 1024 * 1024));
-        const int n = ::send(socket, data, amount, 0);
-        if (n == SOCKET_ERROR)
-        {
-            if (WSAGetLastError() == WSAEINTR)
-            {
-                continue;
-            }
-            return false;
-        }
+    return WSAGetLastError();
 #else
-        const ssize_t n = ::send(socket, data, length, MSG_NOSIGNAL);
-        if (n < 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            return false;
-        }
+    return errno;
 #endif
-        if (n == 0)
+}
+bool wouldBlock(int error)
+{
+#if defined(_WIN32)
+    return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS;
+#else
+    return error == EAGAIN || error == EWOULDBLOCK || error == EINPROGRESS;
+#endif
+}
+bool interrupted(int error)
+{
+#if defined(_WIN32)
+    return error == WSAEINTR;
+#else
+    return error == EINTR;
+#endif
+}
+void shutdownSocket(NativeSocket fd)
+{
+    if (fd == kInvalidSocket) return;
+#if defined(_WIN32)
+    ::shutdown(fd, SD_BOTH);
+#else
+    ::shutdown(fd, SHUT_RDWR);
+#endif
+}
+void closeSocket(NativeSocket fd)
+{
+    if (fd == kInvalidSocket) return;
+#if defined(_WIN32)
+    ::closesocket(fd);
+#else
+    ::close(fd);
+#endif
+}
+Stream::~Stream()
+{
+    freeTls(*this);
+    std::lock_guard<std::mutex> lock(client->socketMutex);
+    if (client->activeSocket == fd) client->activeSocket = kInvalidSocket;
+    closeSocket(fd);
+}
+bool waitSocket(Stream &stream, bool writing, Clock::time_point deadline)
+{
+    while (!cancelled(stream.client))
+    {
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        if (remaining <= 0)
         {
+            stream.error = CLDT_STATUS_TIMEOUT;
             return false;
         }
-        data += n;
-        length -= static_cast<size_t>(n);
+        const int timeout = static_cast<int>(std::min<int64_t>(remaining, 50));
+#if defined(_WIN32)
+        WSAPOLLFD item{};
+#else
+        pollfd item{};
+#endif
+        item.fd = stream.fd;
+        item.events = writing ? POLLOUT : POLLIN;
+#if defined(_WIN32)
+        const int result = WSAPoll(&item, 1, timeout);
+#else
+        const int result = ::poll(&item, 1, timeout);
+#endif
+        if (result > 0) return true; // Caller checks connect/SO_ERROR or performs I/O.
+        if (result < 0 && !interrupted(socketError()))
+        {
+            stream.error = CLDT_STATUS_NETWORK_ERROR;
+            return false;
+        }
     }
-    return true;
+    stream.error = CLDT_STATUS_CANCELLED;
+    return false;
 }
 
-bool receiveExact(NativeSocket socket, void *buffer, size_t length)
+// Detached lookups own their state and never access the client after cancel.
+// Bound outstanding system resolver calls: repeated cancelled DNS requests
+// cannot create an unbounded number of threads. Numeric hosts bypass this path.
+struct Addresses
 {
-    char *data = static_cast<char *>(buffer);
-    while (length > 0)
-    {
+    addrinfo *value = nullptr;
 #if defined(_WIN32)
-        const int amount = static_cast<int>(std::min<size_t>(length, 1024 * 1024));
-        const int n = ::recv(socket, data, amount, 0);
-        if (n == SOCKET_ERROR)
-        {
-            if (WSAGetLastError() == WSAEINTR)
-            {
-                continue;
-            }
-            return false;
-        }
-#else
-        const ssize_t n = ::recv(socket, data, length, 0);
-        if (n < 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            return false;
-        }
+    bool winsock = false;
 #endif
-        if (n == 0)
-        {
-            return false;
-        }
-        data += n;
-        length -= static_cast<size_t>(n);
+    ~Addresses()
+    {
+        if (value) ::freeaddrinfo(value);
+#if defined(_WIN32)
+        if (winsock) WSACleanup();
+#endif
     }
-    return true;
-}
-
-NativeSocket connectSocket(const std::string &host, uint16_t port)
+};
+struct Lookup
+{
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool ready = false;
+    std::shared_ptr<Addresses> addresses = std::make_shared<Addresses>();
+};
+std::shared_ptr<Addresses> resolve(Stream &stream, Clock::time_point deadline)
 {
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    addrinfo *addresses = nullptr;
-    const std::string service = std::to_string(port);
-    if (::getaddrinfo(host.c_str(), service.c_str(), &hints, &addresses) != 0)
+    hints.ai_flags = AI_NUMERICHOST;
+    const std::string service = std::to_string(stream.client->port);
+    auto numeric = std::make_shared<Addresses>();
+    if (::getaddrinfo(stream.client->host.c_str(), service.c_str(), &hints, &numeric->value) == 0)
+        return numeric;
+    static std::atomic<unsigned> pending{0};
+    auto state = std::make_shared<Lookup>();
+    const std::string host = stream.client->host;
+    if (pending.fetch_add(1) >= 8)
     {
-        return kInvalidSocket;
+        pending.fetch_sub(1);
+        stream.error = CLDT_STATUS_BUSY;
+        return nullptr;
     }
-
-    NativeSocket connected = kInvalidSocket;
-    for (addrinfo *address = addresses; address; address = address->ai_next)
+    try
     {
-        NativeSocket candidate = ::socket(address->ai_family, address->ai_socktype,
-                                          address->ai_protocol);
-        if (candidate == kInvalidSocket)
-        {
-            continue;
-        }
-        if (::connect(candidate, address->ai_addr,
+        std::thread([state, host, service] {
 #if defined(_WIN32)
-                      static_cast<int>(address->ai_addrlen)
-#else
-                      static_cast<socklen_t>(address->ai_addrlen)
+            WSADATA data;
+            const bool initialized = WSAStartup(MAKEWORD(2, 2), &data) == 0;
+            state->addresses->winsock = initialized;
 #endif
-                      ) == 0)
-        {
-            connected = candidate;
-            break;
-        }
+            addrinfo query{};
+            query.ai_family = AF_UNSPEC;
+            query.ai_socktype = SOCK_STREAM;
+            query.ai_protocol = IPPROTO_TCP;
 #if defined(_WIN32)
-        ::closesocket(candidate);
-#else
-        ::close(candidate);
+            if (initialized)
 #endif
+                ::getaddrinfo(host.c_str(), service.c_str(), &query, &state->addresses->value);
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                state->ready = true;
+            }
+            state->cv.notify_one();
+            // The returned address owner keeps its Winsock reference even when
+            // the originating client has already timed out and been destroyed.
+            pending.fetch_sub(1);
+        }).detach();
     }
-    ::freeaddrinfo(addresses);
-    if (connected != kInvalidSocket)
+    catch (...)
     {
-        int one = 1;
-        ::setsockopt(connected, IPPROTO_TCP, TCP_NODELAY,
-#if defined(_WIN32)
-                     reinterpret_cast<const char *>(&one), sizeof(one)
-#else
-                     &one, sizeof(one)
-#endif
-        );
-#if defined(SO_NOSIGPIPE)
-        ::setsockopt(connected, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
-#endif
-#if defined(_WIN32)
-        DWORD timeout = 60000;
-        ::setsockopt(connected, SOL_SOCKET, SO_RCVTIMEO,
-                     reinterpret_cast<const char *>(&timeout), sizeof(timeout));
-        ::setsockopt(connected, SOL_SOCKET, SO_SNDTIMEO,
-                     reinterpret_cast<const char *>(&timeout), sizeof(timeout));
-#else
-        timeval timeout{};
-        timeout.tv_sec = 60;
-        ::setsockopt(connected, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        ::setsockopt(connected, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-#endif
+        pending.fetch_sub(1);
+        stream.error = CLDT_STATUS_INTERNAL_ERROR;
+        return nullptr;
     }
-    return connected;
+    std::unique_lock<std::mutex> lock(state->mutex);
+    while (!state->ready)
+    {
+        if (cancelled(stream.client)) { stream.error = CLDT_STATUS_CANCELLED; return nullptr; }
+        if (Clock::now() >= deadline) { stream.error = CLDT_STATUS_TIMEOUT; return nullptr; }
+        state->cv.wait_for(lock, std::chrono::milliseconds(25));
+    }
+    return state->addresses;
 }
 
-void closeSocket(NativeSocket socket)
+bool connectStream(Stream &stream)
 {
-    if (socket == kInvalidSocket)
+    auto deadline = Clock::now() + std::chrono::milliseconds(stream.client->connectTimeoutMs);
+    auto addresses = resolve(stream, deadline);
+    if (!addresses || !addresses->value)
     {
-        return;
+        if (stream.error == CLDT_STATUS_OK) stream.error = CLDT_STATUS_CONNECT_FAILED;
+        return false;
     }
+    for (auto *address = addresses->value; address; address = address->ai_next)
+    {
+        if (cancelled(stream.client)) { stream.error = CLDT_STATUS_CANCELLED; return false; }
+        if (Clock::now() >= deadline) { stream.error = CLDT_STATUS_TIMEOUT; return false; }
+        NativeSocket candidate = ::socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+        if (candidate == kInvalidSocket) continue;
 #if defined(_WIN32)
-    ::shutdown(socket, SD_BOTH);
-    ::closesocket(socket);
+        u_long nonblocking = 1;
+        const bool configured = ioctlsocket(candidate, FIONBIO, &nonblocking) == 0;
 #else
-    ::shutdown(socket, SHUT_RDWR);
-    ::close(socket);
+        const int flags = fcntl(candidate, F_GETFL, 0);
+        const bool configured = flags >= 0 && fcntl(candidate, F_SETFL, flags | O_NONBLOCK) == 0;
+        fcntl(candidate, F_SETFD, FD_CLOEXEC);
 #endif
+        if (!configured) { closeSocket(candidate); continue; }
+        stream.fd = candidate;
+        {
+            std::lock_guard<std::mutex> lock(stream.client->socketMutex);
+            stream.client->activeSocket = candidate;
+        }
+        int result = ::connect(candidate, address->ai_addr,
+#if defined(_WIN32)
+                               static_cast<int>(address->ai_addrlen));
+#else
+                               address->ai_addrlen);
+#endif
+        bool connected = result == 0;
+        if (!connected && wouldBlock(socketError()) && waitSocket(stream, true, deadline))
+        {
+            int error = 0;
+#if defined(_WIN32)
+            int length = sizeof(error);
+            connected = getsockopt(candidate, SOL_SOCKET, SO_ERROR,
+                                   reinterpret_cast<char *>(&error), &length) == 0 && error == 0;
+#else
+            socklen_t length = sizeof(error);
+            connected = getsockopt(candidate, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0;
+#endif
+        }
+        if (connected)
+        {
+            int one = 1;
+            setsockopt(candidate, IPPROTO_TCP, TCP_NODELAY,
+#if defined(_WIN32)
+                       reinterpret_cast<const char *>(&one), sizeof(one));
+#else
+                       &one, sizeof(one));
+#endif
+#if defined(SO_NOSIGPIPE)
+            setsockopt(candidate, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+            stream.error = CLDT_STATUS_OK;
+            return !stream.client->tlsEnabled || startTls(stream, deadline);
+        }
+        {
+            std::lock_guard<std::mutex> lock(stream.client->socketMutex);
+            stream.client->activeSocket = kInvalidSocket;
+            closeSocket(candidate);
+            stream.fd = kInvalidSocket;
+        }
+        if (stream.error == CLDT_STATUS_CANCELLED || stream.error == CLDT_STATUS_TIMEOUT) return false;
+    }
+    stream.error = CLDT_STATUS_CONNECT_FAILED;
+    return false;
 }
 
-
+bool transfer(Stream &stream, void *buffer, size_t length, bool writing)
+{
+    char *data = static_cast<char *>(buffer);
+    auto deadline = Clock::now() + std::chrono::milliseconds(stream.client->ioTimeoutMs);
+    while (length)
+    {
+        if (cancelled(stream.client)) { stream.error = CLDT_STATUS_CANCELLED; return false; }
+        const int amount = static_cast<int>(std::min<size_t>(length, 1024 * 1024));
+        int n;
+        if (stream.tls)
+        {
+            n = writing ? tlsWrite(stream, data, amount) : tlsRead(stream, data, amount);
+            if (n == -2 || n == -3)
+            {
+                if (!waitSocket(stream, n == -3, deadline)) return false;
+                continue;
+            }
+        }
+        else
+        {
+            n = static_cast<int>(writing ? ::send(stream.fd, data, amount, MSG_NOSIGNAL)
+                                         : ::recv(stream.fd, data, amount, 0));
+            if (n < 0)
+            {
+                const int error = socketError();
+                if (interrupted(error)) continue;
+                if (wouldBlock(error))
+                {
+                    if (!waitSocket(stream, writing, deadline)) return false;
+                    continue;
+                }
+            }
+        }
+        if (n <= 0)
+        {
+            if (stream.error == CLDT_STATUS_OK) stream.error = CLDT_STATUS_NETWORK_ERROR;
+            return false;
+        }
+        data += n;
+        length -= static_cast<size_t>(n);
+        deadline = Clock::now() + std::chrono::milliseconds(stream.client->ioTimeoutMs);
+    }
+    return true;
+}
+bool sendAll(Stream &stream, const void *buffer, size_t length)
+{
+    return transfer(stream, const_cast<void *>(buffer), length, true);
+}
+bool receiveExact(Stream &stream, void *buffer, size_t length)
+{
+    return transfer(stream, buffer, length, false);
+}
 } // namespace cldt_sdk

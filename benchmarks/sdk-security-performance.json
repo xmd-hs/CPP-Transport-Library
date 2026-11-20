@@ -1,0 +1,153 @@
+{
+  "host": "192.168.80.211",
+  "clients": 4,
+  "size_mib": 256,
+  "durability": "SYNC",
+  "cpu_scope": "client + backend + TLS gateway",
+  "records": [
+    {
+      "tls": true,
+      "mode": "upload",
+      "round": -1,
+      "warmup": true,
+      "seconds": 1.2619679140007065,
+      "cpu_seconds": 5.486033,
+      "mib_per_second": 811.4310899979242
+    },
+    {
+      "tls": true,
+      "mode": "download",
+      "round": -1,
+      "warmup": true,
+      "seconds": 2.0511838870006613,
+      "cpu_seconds": 11.705192,
+      "mib_per_second": 499.22389040279637
+    },
+    {
+      "tls": false,
+      "mode": "upload",
+      "round": -1,
+      "warmup": true,
+      "seconds": 1.9351492379973934,
+      "cpu_seconds": 5.665496999999995,
+      "mib_per_second": 529.1581547786442
+    },
+    {
+      "tls": false,
+      "mode": "download",
+      "round": -1,
+      "warmup": true,
+      "seconds": 0.4775997990000178,
+      "cpu_seconds": 1.6989250000000027,
+      "mib_per_second": 2144.0545036744493
+    },
+    {
+      "tls": false,
+      "mode": "upload",
+      "round": 0,
+      "warmup": false,
+      "seconds": 0.1724511030006397,
+      "cpu_seconds": 0.7009469999999993,
+      "mib_per_second": 5937.915050599598
+    },
+    {
+      "tls": false,
+      "mode": "download",
+      "round": 0,
+      "warmup": false,
+      "seconds": 0.10825869399923249,
+      "cpu_seconds": 0.46594799999999736,
+      "mib_per_second": 9458.824618808534
+    },
+    {
+      "tls": true,
+      "mode": "upload",
+      "round": 0,
+      "warmup": false,
+      "seconds": 0.4728437519988802,
+      "cpu_seconds": 4.6930480000000045,
+      "mib_per_second": 2165.6202406634
+    },
+    {
+      "tls": true,
+      "mode": "download",
+      "round": 0,
+      "warmup": false,
+      "seconds": 0.3031495219984208,
+      "cpu_seconds": 2.2416750000000008,
+      "mib_per_second": 3377.871069199094
+    },
+    {
+      "tls": true,
+      "mode": "upload",
+      "round": 1,
+      "warmup": false,
+      "seconds": 0.4856500390014844,
+      "cpu_seconds": 4.680365000000002,
+      "mib_per_second": 2108.5141928648545
+    },
+    {
+      "tls": true,
+      "mode": "download",
+      "round": 1,
+      "warmup": false,
+      "seconds": 0.2805086490006943,
+      "cpu_seconds": 2.140196000000003,
+      "mib_per_second": 3650.5113252228653
+    },
+    {
+      "tls": false,
+      "mode": "upload",
+      "round": 1,
+      "warmup": false,
+      "seconds": 0.151767186998768,
+      "cpu_seconds": 0.5934179999999998,
+      "mib_per_second": 6747.176515884902
+    },
+    {
+      "tls": false,
+      "mode": "download",
+      "round": 1,
+      "warmup": false,
+      "seconds": 0.1011700099988957,
+      "cpu_seconds": 0.4442319999999995,
+      "mib_per_second": 10121.576542407945
+    },
+    {
+      "tls": false,
+      "mode": "upload",
+      "round": 2,
+      "warmup": false,
+      "seconds": 0.18195127400031197,
+      "cpu_seconds": 0.6283230000000017,
+      "mib_per_second": 5627.880352177387
+    },
+    {
+      "tls": false,
+      "mode": "download",
+      "round": 2,
+      "warmup": false,
+      "seconds": 0.11553844300215133,
+      "cpu_seconds": 0.5117489999999947,
+      "mib_per_second": 8862.85095585833
+    },
+    {
+      "tls": true,
+      "mode": "upload",
+      "round": 2,
+      "warmup": false,
+      "seconds": 0.5170703639996646,
+      "cpu_seconds": 4.90188599999999,
+      "mib_per_second": 1980.3881082626974
+    },
+    {
+      "tls": true,
+      "mode": "download",
+      "round": 2,
+      "warmup": false,
+      "seconds": 0.3508552810017136,
+      "cpu_seconds": 2.6292700000000053,
+      "mib_per_second": 2918.582262967274
+    }
+  ]
+}

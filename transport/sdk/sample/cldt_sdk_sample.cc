@@ -84,6 +84,18 @@ int runSample(int argc, char **argv)
         return 1;
     }
 
+    cldt_client_options options;
+    cldt_client_options_init(&options);
+    const char *ca = std::getenv("CLDT_TLS_CA");
+    options.tls_enabled = ca != nullptr;
+    options.ca_file = ca;
+    options.server_name = std::getenv("CLDT_TLS_SERVER_NAME");
+    if (cldt_client_set_options(client, &options) != CLDT_STATUS_OK)
+    {
+        cldt_client_destroy(client);
+        std::fprintf(stderr, "failed to configure SDK options\n");
+        return 1;
+    }
     const std::string command = argv[4];
     int submitStatus = CLDT_STATUS_INVALID_ARGUMENT;
     if (command == "upload" && argc >= 7)
@@ -122,7 +134,7 @@ int runSample(int argc, char **argv)
         }
     }
     cldt_client_destroy(client);
-    std::fprintf(stderr, "\n%s (%llu bytes)\n", completion.message.c_str(),
+    std::fprintf(stderr, "\nstatus=%d %s (%llu bytes)\n", completion.status, completion.message.c_str(),
                  static_cast<unsigned long long>(completion.total));
     return completion.status == CLDT_STATUS_OK ? 0 : 2;
 }

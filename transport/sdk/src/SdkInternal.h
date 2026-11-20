@@ -16,8 +16,12 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <memory>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -29,7 +33,7 @@
 #include <sys/types.h>
 #endif
 
-#if !defined(_WIN32) && !defined(MSG_NOSIGNAL)
+#if !defined(MSG_NOSIGNAL)
 #define MSG_NOSIGNAL 0
 #endif
 
@@ -75,14 +79,35 @@ struct Frame
     std::string body;
 };
 
-bool sendAll(NativeSocket socket, const void *buffer, size_t length);
-bool receiveExact(NativeSocket socket, void *buffer, size_t length);
-NativeSocket connectSocket(const std::string &host, uint16_t port);
+struct Stream
+{
+    cldt_client *client;
+    NativeSocket fd = kInvalidSocket;
+    void *tls = nullptr;
+    void *tlsContext = nullptr;
+    int error = CLDT_STATUS_OK;
+    explicit Stream(cldt_client *owner) : client(owner) {}
+    ~Stream();
+    Stream(const Stream &) = delete;
+    Stream &operator=(const Stream &) = delete;
+};
+bool connectStream(Stream &stream);
+bool startTls(Stream &stream, Clock::time_point deadline);
+void freeTls(Stream &stream);
+int tlsRead(Stream &stream, void *data, int size);
+int tlsWrite(Stream &stream, const void *data, int size);
+bool waitSocket(Stream &stream, bool writing, Clock::time_point deadline);
+int socketError();
+bool wouldBlock(int error);
+void shutdownSocket(NativeSocket fd);
+
+bool sendAll(Stream &socket, const void *buffer, size_t length);
+bool receiveExact(Stream &socket, void *buffer, size_t length);
 void closeSocket(NativeSocket socket);
-bool sendFrame(NativeSocket socket, uint8_t type, const std::string &extra, const std::string &body, uint64_t bodyLen, uint64_t offset, uint64_t fileSize, uint16_t flags = 0);
-bool receiveFrame(NativeSocket socket, Frame *frame);
+bool sendFrame(Stream &socket, uint8_t type, const std::string &extra, const std::string &body, uint64_t bodyLen, uint64_t offset, uint64_t fileSize, uint16_t flags = 0);
+bool receiveFrame(Stream &socket, Frame *frame);
 // Returns false when the native fast path is unavailable; resume via readAt at done.
-bool uploadNativeFile(cldt_client *client, NativeSocket socket, void *file,
+bool uploadNativeFile(cldt_client *client, Stream &socket, void *file,
                       uint64_t offset, uint64_t total, uint64_t *done, int *status);
 bool cancelled(const cldt_client *client);
 void reportProgress(cldt_client *client, uint64_t transferred, uint64_t total, bool upload);
@@ -92,7 +117,8 @@ int openFile(cldt_client *client,
              uint64_t expectedSize,
              void **handle,
              uint64_t *size);
-void closeFile(cldt_client *client, void *handle);
+bool closeFile(cldt_client *client, void *handle);
+bool syncFile(cldt_client *client, void *handle);
 bool readAt(cldt_client *client,
             void *handle,
             uint64_t offset,
@@ -108,9 +134,9 @@ bool writeAt(cldt_client *client,
 
 void workerLoop(cldt_client *client);
 int enqueue(cldt_client *client, Request request);
-int processUpload(cldt_client *, NativeSocket, const Request &, uint64_t *, std::string *);
-int processDownload(cldt_client *, NativeSocket, const Request &, uint64_t *, std::string *);
-int processStat(NativeSocket, const cldt_client *, const Request &, uint64_t *, std::string *);
+int processUpload(cldt_client *, Stream &, const Request &, uint64_t *, std::string *);
+int processDownload(cldt_client *, Stream &, const Request &, uint64_t *, std::string *);
+int processStat(Stream &, const cldt_client *, const Request &, uint64_t *, std::string *);
 } // namespace cldt_sdk
 
 struct cldt_client
@@ -123,6 +149,13 @@ struct cldt_client
     void *userData = nullptr;
     cldt_file_io fileIo{};
     bool customFileIo = false;
+    cldt_file_sync_fn fileSync = nullptr;
+    uint32_t connectTimeoutMs = 10000;
+    uint32_t ioTimeoutMs = 60000;
+    bool tlsEnabled = false;
+    std::string caFile;
+    std::string serverName;
+    int durability = CLDT_DURABILITY_SYNC;
 
     std::mutex mutex;
     std::condition_variable cv;

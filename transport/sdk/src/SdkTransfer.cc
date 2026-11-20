@@ -2,7 +2,21 @@
 
 namespace cldt_sdk
 {
-bool sendDownloadRequest(NativeSocket socket, const cldt_client *client, const Request &request)
+namespace
+{
+struct FileGuard
+{
+    cldt_client *client;
+    void *&handle;
+    ~FileGuard() { closeFile(client, handle); }
+};
+int remoteError(const Frame &frame)
+{
+    if (frame.offset < 1 || frame.offset > 9) return CLDT_STATUS_PROTOCOL_ERROR;
+    return CLDT_STATUS_REMOTE_ERROR_BASE + static_cast<int>(frame.offset);
+}
+}
+bool sendDownloadRequest(Stream &socket, const cldt_client *client, const Request &request)
 {
     std::string normalized;
     if (!transport::protocol::normalizeRelPath(request.remotePath, &normalized))
@@ -14,15 +28,16 @@ bool sendDownloadRequest(NativeSocket socket, const cldt_client *client, const R
                      extra, std::string(), request.length, request.offset, 0);
 }
 
-int processUpload(cldt_client *client, NativeSocket socket, const Request &request,
+int processUpload(cldt_client *client, Stream &socket, const Request &request,
                   uint64_t *total, std::string *message)
 {
     void *file = nullptr;
+    FileGuard guard{client, file};
     uint64_t fileSize = 0;
     if (openFile(client, request.localIdentifier, CLDT_FILE_READ, 0, &file, &fileSize) != 0 ||
-        request.offset > fileSize)
+        request.offset > fileSize || fileSize > static_cast<uint64_t>(INT64_MAX))
     {
-        closeFile(client, file);
+        closeFile(client, file); file = nullptr;
         *message = "cannot open source or offset exceeds file size";
         return CLDT_STATUS_FILE_ERROR;
     }
@@ -30,7 +45,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
     std::string normalized;
     if (!transport::protocol::normalizeRelPath(request.remotePath, &normalized))
     {
-        closeFile(client, file);
+        closeFile(client, file); file = nullptr;
         *message = "invalid remote path";
         return CLDT_STATUS_INVALID_ARGUMENT;
     }
@@ -38,7 +53,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
                    transport::protocol::encodeExtra(client->token, normalized),
                    std::string(), 0, request.offset, fileSize))
     {
-        closeFile(client, file);
+        closeFile(client, file); file = nullptr;
         *message = "failed to send upload request";
         return CLDT_STATUS_NETWORK_ERROR;
     }
@@ -50,7 +65,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
                                                  *total, &done, &nativeStatus);
     if (nativeHandled && nativeStatus != CLDT_STATUS_OK)
     {
-        closeFile(client, file);
+        closeFile(client, file); file = nullptr;
         *message = "native upload failed or cancelled";
         return nativeStatus;
     }
@@ -61,7 +76,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
     {
         if (cancelled(client))
         {
-            closeFile(client, file);
+            closeFile(client, file); file = nullptr;
             *message = "cancelled";
             return CLDT_STATUS_CANCELLED;
         }
@@ -71,9 +86,9 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
         {
             size_t n = 0;
             if (!readAt(client, file, request.offset + done + got,
-                        buffer.data() + got, wanted - got, &n) || n == 0)
+                        buffer.data() + got, wanted - got, &n) || n == 0 || n > wanted - got)
             {
-                closeFile(client, file);
+                closeFile(client, file); file = nullptr;
                 *message = "source read failed or reached EOF";
                 return CLDT_STATUS_FILE_ERROR;
             }
@@ -81,7 +96,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
         }
         if (!sendAll(socket, buffer.data(), got))
         {
-            closeFile(client, file);
+            closeFile(client, file); file = nullptr;
             *message = "upload stream send failed";
             return cancelled(client) ? CLDT_STATUS_CANCELLED : CLDT_STATUS_NETWORK_ERROR;
         }
@@ -92,7 +107,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
             lastReport = Clock::now();
         }
     }
-    closeFile(client, file);
+    closeFile(client, file); file = nullptr;
 
     Frame response;
     if (!receiveFrame(socket, &response))
@@ -103,9 +118,10 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
     if (response.type == static_cast<uint8_t>(transport::MessageType::kError))
     {
         *message = response.body;
-        return CLDT_STATUS_REMOTE_ERROR;
+        return remoteError(response);
     }
-    if (response.type != static_cast<uint8_t>(transport::MessageType::kUploadDone))
+    if (response.type != static_cast<uint8_t>(transport::MessageType::kUploadDone) ||
+        response.offset != request.offset || response.fileSize != fileSize || response.bodyLen != 0)
     {
         *message = "unexpected upload response";
         return CLDT_STATUS_PROTOCOL_ERROR;
@@ -114,7 +130,7 @@ int processUpload(cldt_client *client, NativeSocket socket, const Request &reque
     return CLDT_STATUS_OK;
 }
 
-int processDownload(cldt_client *client, NativeSocket socket, const Request &request,
+int processDownload(cldt_client *client, Stream &socket, const Request &request,
                     uint64_t *total, std::string *message)
 {
     if (!sendDownloadRequest(socket, client, request))
@@ -131,16 +147,20 @@ int processDownload(cldt_client *client, NativeSocket socket, const Request &req
     if (response.type == static_cast<uint8_t>(transport::MessageType::kError))
     {
         *message = response.body;
-        return CLDT_STATUS_REMOTE_ERROR;
+        return remoteError(response);
     }
     if (response.type != static_cast<uint8_t>(transport::MessageType::kDownloadResp) ||
-        response.offset != request.offset)
+        response.offset != request.offset || response.fileSize > static_cast<uint64_t>(INT64_MAX) ||
+        response.offset > response.fileSize ||
+        response.bodyLen != (request.length == 0 ? response.fileSize - response.offset :
+                            std::min(request.length, response.fileSize - response.offset)))
     {
         *message = "unexpected download response";
         return CLDT_STATUS_PROTOCOL_ERROR;
     }
 
     void *file = nullptr;
+    FileGuard guard{client, file};
     uint64_t ignoredSize = 0;
     const uint32_t flags = CLDT_FILE_WRITE |
                            ((request.offset == 0 && request.length == 0)
@@ -162,14 +182,14 @@ int processDownload(cldt_client *client, NativeSocket socket, const Request &req
     {
         if (cancelled(client))
         {
-            closeFile(client, file);
+            closeFile(client, file); file = nullptr;
             *message = "cancelled";
             return CLDT_STATUS_CANCELLED;
         }
         const size_t wanted = static_cast<size_t>(std::min<uint64_t>(buffer.size(), *total - done));
         if (!receiveExact(socket, buffer.data(), wanted))
         {
-            closeFile(client, file);
+            closeFile(client, file); file = nullptr;
             *message = cancelled(client) ? "cancelled" : "download stream receive failed";
             return cancelled(client) ? CLDT_STATUS_CANCELLED : CLDT_STATUS_NETWORK_ERROR;
         }
@@ -178,9 +198,9 @@ int processDownload(cldt_client *client, NativeSocket socket, const Request &req
         {
             size_t n = 0;
             if (!writeAt(client, file, request.offset + done + written,
-                         buffer.data() + written, wanted - written, &n) || n == 0)
+                         buffer.data() + written, wanted - written, &n) || n == 0 || n > wanted - written)
             {
-                closeFile(client, file);
+                closeFile(client, file); file = nullptr;
                 *message = "destination write failed";
                 return CLDT_STATUS_FILE_ERROR;
             }
@@ -193,12 +213,23 @@ int processDownload(cldt_client *client, NativeSocket socket, const Request &req
             lastReport = Clock::now();
         }
     }
-    closeFile(client, file);
+    if (!syncFile(client, file))
+    {
+        *message = "destination sync failed";
+        return CLDT_STATUS_FILE_ERROR;
+    }
+    const bool closed = closeFile(client, file);
+    file = nullptr;
+    if (!closed)
+    {
+        *message = "destination close failed";
+        return CLDT_STATUS_FILE_ERROR;
+    }
     *message = "download done";
     return CLDT_STATUS_OK;
 }
 
-int processStat(NativeSocket socket, const cldt_client *client, const Request &request,
+int processStat(Stream &socket, const cldt_client *client, const Request &request,
                 uint64_t *total, std::string *message)
 {
     std::string normalized;
@@ -219,9 +250,11 @@ int processStat(NativeSocket socket, const cldt_client *client, const Request &r
     if (response.type == static_cast<uint8_t>(transport::MessageType::kError))
     {
         *message = response.body;
-        return CLDT_STATUS_REMOTE_ERROR_BASE + static_cast<int>(response.offset);
+        return remoteError(response);
     }
-    if (response.type != static_cast<uint8_t>(transport::MessageType::kStatResp))
+    if (response.type != static_cast<uint8_t>(transport::MessageType::kStatResp) ||
+        response.bodyLen != 0 || response.offset != 0 ||
+        response.fileSize > static_cast<uint64_t>(INT64_MAX))
     {
         *message = "unexpected stat response";
         return CLDT_STATUS_PROTOCOL_ERROR;

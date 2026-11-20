@@ -8,7 +8,8 @@ cldt_client *cldt_client_create(const char *host, uint16_t port, const char *tok
                                 cldt_progress_fn progress, cldt_done_fn done,
                                 void *user_data)
 {
-    if (!host || !*host || port == 0)
+    if (!host || !*host || port == 0 ||
+        (token && std::strlen(token) > transport::protocol::kMaxTokenLen))
     {
         return nullptr;
     }
@@ -19,23 +20,17 @@ cldt_client *cldt_client_create(const char *host, uint16_t port, const char *tok
         return nullptr;
     }
 #endif
-    auto *client = new (std::nothrow) cldt_client();
-    if (!client)
-    {
-#if defined(_WIN32)
-        ::WSACleanup();
-#endif
-        return nullptr;
-    }
-    client->host = host;
-    client->port = port;
-    client->token = token ? token : "";
-    client->progress = progress;
-    client->done = done;
-    client->userData = user_data;
-    client->fileIo.struct_size = sizeof(cldt_file_io);
+    cldt_client *client = nullptr;
     try
     {
+        client = new cldt_client();
+        client->host = host;
+        client->port = port;
+        client->token = token ? token : "";
+        client->progress = progress;
+        client->done = done;
+        client->userData = user_data;
+        client->fileIo.struct_size = sizeof(cldt_file_io);
         client->worker = std::thread(workerLoop, client);
     }
     catch (...)
@@ -64,6 +59,7 @@ int cldt_client_set_file_io(cldt_client *client, const cldt_file_io *file_io)
     {
         client->customFileIo = false;
         client->fileIo = cldt_file_io{};
+        client->fileSync = nullptr;
         return CLDT_STATUS_OK;
     }
     if (file_io->struct_size < sizeof(cldt_file_io) || !file_io->open ||
@@ -72,12 +68,14 @@ int cldt_client_set_file_io(cldt_client *client, const cldt_file_io *file_io)
         return CLDT_STATUS_INVALID_ARGUMENT;
     }
     client->fileIo = *file_io;
+    client->fileSync = nullptr;
     client->customFileIo = true;
     return CLDT_STATUS_OK;
 }
 
 int cldt_client_upload(cldt_client *client, const char *local_identifier,
                        const char *remote_relative_path, uint64_t offset)
+try
 {
     if (!local_identifier || !remote_relative_path)
     {
@@ -90,9 +88,11 @@ int cldt_client_upload(cldt_client *client, const char *local_identifier,
     request.offset = offset;
     return enqueue(client, std::move(request));
 }
+catch (...) { return CLDT_STATUS_INTERNAL_ERROR; }
 
 int cldt_client_download(cldt_client *client, const char *remote_relative_path,
                          const char *local_identifier, uint64_t offset, uint64_t length)
+try
 {
     if (!remote_relative_path || !local_identifier)
     {
@@ -106,8 +106,10 @@ int cldt_client_download(cldt_client *client, const char *remote_relative_path,
     request.length = length;
     return enqueue(client, std::move(request));
 }
+catch (...) { return CLDT_STATUS_INTERNAL_ERROR; }
 
 int cldt_client_stat(cldt_client *client, const char *remote_relative_path)
+try
 {
     if (!remote_relative_path)
     {
@@ -118,6 +120,7 @@ int cldt_client_stat(cldt_client *client, const char *remote_relative_path)
     request.remotePath = remote_relative_path;
     return enqueue(client, std::move(request));
 }
+catch (...) { return CLDT_STATUS_INTERNAL_ERROR; }
 
 int cldt_client_cancel(cldt_client *client)
 {

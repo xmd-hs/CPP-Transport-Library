@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+if(@CLDT_SDK_ENABLE_TLS@ AND NOT @CLDT_SDK_BUILD_SHARED@)
+    find_dependency(OpenSSL 1.1.1 COMPONENTS SSL Crypto)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/cldtClientSdkTargets.cmake")
+check_required_components(cldt_client_sdk)
