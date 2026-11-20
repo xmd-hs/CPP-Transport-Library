@@ -177,7 +177,7 @@ CTest 包含协议编解码、CRC 标准向量、路径 NUL 拒绝，以及真�
 cmp ./data.bin ./out.bin
 
 # 同机 1seed+2leech 及“停 seed 后纯 P2P”验收（在构建目录旁）
-python3 example/_run_demo.py
+python3 scripts/p2p_demo.py
 ```
 
 目录：`transport/p2p/`（`KademliaNode` / `TorrentMeta` / `PieceStore` / `PeerSession` / `TorrentSession`）。

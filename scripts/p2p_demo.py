@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """1 seed + 2 leech, then former-leech reseeds for leech3."""
 import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
-root = os.path.expanduser("~/chuanshuku_src")
+root = str(Path(__file__).resolve().parents[1])
 os.chdir(root)
-work = "/tmp/p2p_demo_run"
-subprocess.check_call(["rm", "-rf", work])
-os.makedirs(work)
+workspace = tempfile.TemporaryDirectory(prefix="cldt-p2p-demo-")
+work = workspace.name
 subprocess.check_call(
     ["dd", "if=/dev/urandom", "of=%s/data.bin" % work, "bs=1024", "count=512", "status=none"]
 )

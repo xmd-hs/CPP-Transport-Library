@@ -19,3 +19,10 @@ __pycache__/
 *.log
 /example/test_receive
 /example/test_disk_io
+
+# Local one-off diagnostics; keep these out of the source repository.
+/example/_py_udp.py
+/example/_udp_probe.py
+/example/_run_demo.py
+/example/_run_perf.py
+/example/_run_smoke.py

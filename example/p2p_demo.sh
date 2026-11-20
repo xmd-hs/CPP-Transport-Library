@@ -3,4 +3,4 @@
 # 在已构建的源码树根目录旁执行；WSL 下若 127.0.0.1 UDP 异常，节点会自动探测宣告 IP。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-exec python3 "$ROOT/example/_run_demo.py"
+exec python3 "$ROOT/scripts/p2p_demo.py"
